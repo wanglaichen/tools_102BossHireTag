@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>简历投递公司标记</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">Resume Delivery Tracker</p>
+                <h1>简历投递公司标记</h1>
+            </div>
+            <div class="metrics">
+                <article>
+                    <span>公司总数</span>
+                    <strong id="companyCount">0</strong>
+                </article>
+                <article>
+                    <span>已拒绝</span>
+                    <strong id="rejectedCount">0</strong>
+                </article>
+                <article>
+                    <span>猎头</span>
+                    <strong id="hunterCount">0</strong>
+                </article>
+                <article>
+                    <span>需跟进</span>
+                    <strong id="followUpCount">0</strong>
+                </article>
+            </div>
+        </header>
+
+        <div class="alert alert-danger d-none" id="errorBox"></div>
+        <div class="alert alert-success d-none" id="successBox"></div>
+
+        <main class="workspace">
+            <section class="side-panel">
+                <div class="panel-title">
+                    <h2>新增记录</h2>
+                    <span id="lastUpdatedAt">-</span>
+                </div>
+                <form id="companyForm" class="record-form">
+                    <label>
+                        <span>企业名称</span>
+                        <input id="companyNameInput" class="form-control" autocomplete="off" required>
+                    </label>
+                    <label>
+                        <span>效果状态</span>
+                        <input id="effectStatusInput" class="form-control" list="statusList" placeholder="拒绝 / 加微信 / 在考虑">
+                    </label>
+                    <label>
+                        <span>行业</span>
+                        <input id="industryInput" class="form-control" list="industryList" placeholder="棋牌 / 游戏 / 互联网">
+                    </label>
+                    <label>
+                        <span>是否是猎头</span>
+                        <select id="hunterInput" class="form-select">
+                            <option value="unknown">未标记</option>
+                            <option value="yes">是</option>
+                            <option value="no">否</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>备注</span>
+                        <textarea id="noteInput" class="form-control" rows="3" placeholder="联系人、渠道、下一步动作"></textarea>
+                    </label>
+                    <button class="btn btn-primary w-100" id="submitButton" type="submit">保存记录</button>
+                    <button class="btn btn-outline-secondary w-100 d-none" id="cancelEditButton" type="button">取消编辑</button>
+                </form>
+
+                <div class="import-box">
+                    <div class="panel-title compact">
+                        <h2>批量粘贴</h2>
+                    </div>
+                    <textarea id="bulkImportInput" class="form-control" rows="7" placeholder="从 Excel 复制表格行，列顺序：企业名称、效果状态、行业、是否是猎头、备注"></textarea>
+                    <button class="btn btn-outline-primary w-100" id="importButton" type="button">导入 / 更新</button>
+                </div>
+            </section>
+
+            <section class="table-panel">
+                <div class="tools">
+                    <div class="search-group">
+                        <input id="searchInput" class="form-control" placeholder="搜索公司、状态、行业、备注">
+                        <select id="statusFilter" class="form-select">
+                            <option value="">全部状态</option>
+                        </select>
+                        <select id="hunterFilter" class="form-select">
+                            <option value="">全部类型</option>
+                            <option value="yes">猎头</option>
+                            <option value="no">非猎头</option>
+                            <option value="unknown">未标记</option>
+                        </select>
+                    </div>
+                    <div class="action-group">
+                        <a class="btn btn-outline-secondary" href="/api/companies/export.csv">导出 CSV</a>
+                        <a class="btn btn-outline-secondary" href="/api/companies/export.json">导出 JSON</a>
+                    </div>
+                </div>
+                <datalist id="statusList"></datalist>
+                <datalist id="industryList"></datalist>
+                <div class="table-wrap">
+                    <table class="table align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>企业名称</th>
+                                <th>效果状态</th>
+                                <th>行业</th>
+                                <th>是否是猎头</th>
+                                <th>备注</th>
+                                <th>更新时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="companyTableBody">
+                            <tr><td colspan="7" class="empty-cell">暂无记录</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
