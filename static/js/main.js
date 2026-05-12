@@ -70,8 +70,8 @@ function resetForm() {
 function fillForm(item) {
     state.editingId = item.id;
     byId("companyNameInput").value = item.company_name || "";
-    setMultiSelectValues("effectStatusInput", (item.effect_status || "").split(",").filter(v => v));
-    setMultiSelectValues("industryInput", (item.industry || "").split(",").filter(v => v));
+    setSelectValues("effectStatusInput", (item.effect_status || "").split(",").filter(v => v));
+    setSelectValues("industryInput", (item.industry || "").split(",").filter(v => v));
     byId("hunterInput").value = item.is_hunter || "unknown";
     byId("outsourcedInput").value = item.is_outsourced || "unknown";
     byId("interviewedInput").value = item.is_interviewed || "unknown";
@@ -81,22 +81,37 @@ function fillForm(item) {
     byId("companyForm").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function setMultiSelectValues(selectId, values) {
-    const options = byId(selectId).options;
-    for (const opt of options) {
-        opt.selected = values.includes(opt.value);
+function setSelectValues(selectId, values) {
+    const select = byId(selectId);
+    const options = Array.from(select.options);
+    if (select.multiple) {
+        const selected = new Set(values);
+        options.forEach((opt) => {
+            opt.selected = selected.has(opt.value);
+        });
+        return;
     }
+
+    const selectedValue = values.find((value) => options.some((opt) => opt.value === value));
+    select.value = selectedValue || "";
 }
 
-function populateSelectOptions(selectId, options) {
+function populateSelectOptions(selectId, options, placeholder) {
     const select = byId(selectId);
+    const selectedValues = Array.from(select.selectedOptions).map((option) => option.value).filter(Boolean);
     select.innerHTML = "";
+    const placeholderOption = document.createElement("option");
+    placeholderOption.value = "";
+    placeholderOption.textContent = placeholder;
+    select.appendChild(placeholderOption);
+
     options.forEach(opt => {
         const option = document.createElement("option");
         option.value = opt;
         option.textContent = opt;
         select.appendChild(option);
     });
+    setSelectValues(selectId, selectedValues);
 }
 
 function formatTime(value) {
@@ -142,8 +157,8 @@ function renderSummary(summary) {
     state.settings = summary.settings || state.settings;
     renderStatusFilter(summary.statuses || []);
     renderConfigChips();
-    populateSelectOptions("effectStatusInput", state.settings.status_options || []);
-    populateSelectOptions("industryInput", state.settings.industry_options || []);
+    populateSelectOptions("effectStatusInput", state.settings.status_options || [], "请选择效果状态");
+    populateSelectOptions("industryInput", state.settings.industry_options || [], "请选择行业");
 }
 
 function renderStatusFilter(values) {

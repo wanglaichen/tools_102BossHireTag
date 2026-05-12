@@ -7,39 +7,14 @@ from werkzeug.exceptions import HTTPException
 
 from config import AppConfig
 from services.company_service import CompanyService
-from services.storage import QuickFallbackStorage, JsonStorage, RedisProxyStore, RedisSettingsStore, RedisStorage
+from services.storage import RedisProxyStore, RedisSettingsStore, create_storage
 
 
 app = Flask(__name__)
 app.config.from_object(AppConfig)
 
 
-def create_storage(config: dict[str, Any]) -> JsonStorage | RedisStorage | QuickFallbackStorage:
-    backend = config.get("STORAGE_BACKEND", "auto").strip().lower()
-    if backend == "json":
-        return JsonStorage(config["STORAGE_FILE"])
-
-    redis_url = config.get("REDIS_URL", "").strip()
-    json_path = config.get("STORAGE_FILE", "")
-
-    if redis_url:
-        redis_storage = RedisStorage(
-            redis_url,
-            config.get("REDIS_KEY_PREFIX", "jjob/tools102-boss-hire-tag/state"),
-            float(config.get("REDIS_TIMEOUT_SECONDS", 5)),
-        )
-        if json_path:
-            json_storage = JsonStorage(json_path)
-            return QuickFallbackStorage(redis_storage, json_storage)
-        return redis_storage
-
-    if backend == "redis" and not redis_url:
-        raise StorageUnavailable("STORAGE_BACKEND=redis 时必须配置 REDIS_URL")
-    return JsonStorage(json_path or "data/companies.json")
-
-
-company_service = CompanyService.from_app_config(app.config)
-company_service.storage = create_storage(AppConfig.__dict__)
+company_service = CompanyService(create_storage(AppConfig.__dict__))
 
 
 @app.errorhandler(ValueError)

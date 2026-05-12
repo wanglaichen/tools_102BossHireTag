@@ -213,14 +213,14 @@ body {
 .form-select,
 .btn {
     border-radius: 6px;
-    background: var(--surface-muted);
+    background-color: var(--surface-muted);
     border: 1px solid var(--line);
     color: var(--text);
 }
 
 .form-control:focus,
 .form-select:focus {
-    background: var(--surface-hover);
+    background-color: var(--surface-hover);
     border-color: var(--blue);
     color: var(--text);
     box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2);

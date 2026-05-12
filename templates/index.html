@@ -66,11 +66,15 @@
                     </label>
                     <label>
                         <span>效果状态</span>
-                        <select id="effectStatusInput" class="form-select" multiple size="3"></select>
+                        <select id="effectStatusInput" class="form-select">
+                            <option value="">请选择效果状态</option>
+                        </select>
                     </label>
                     <label>
                         <span>行业</span>
-                        <select id="industryInput" class="form-select" multiple size="3"></select>
+                        <select id="industryInput" class="form-select">
+                            <option value="">请选择行业</option>
+                        </select>
                     </label>
                     <div class="grid-two">
                         <label>
@@ -163,8 +167,6 @@
                         <a class="btn btn-outline-secondary" href="/api/companies/export.json">导出 JSON</a>
                     </div>
                 </div>
-                <datalist id="statusList"></datalist>
-                <datalist id="industryList"></datalist>
                 <div class="table-wrap">
                     <table class="table align-middle mb-0">
                         <thead>

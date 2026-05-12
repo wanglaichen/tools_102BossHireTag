@@ -53,7 +53,7 @@ class RedisStorage:
         if redis is None:
             raise StorageUnavailable("redis 依赖未安装，请先执行 pip install -r requirements.txt")
         self.url = url
-        self.key = f"{key_prefix.rstrip('/')}/companies"
+        self.key_prefix = key_prefix.rstrip(":")
         self._timeout = timeout_seconds
         self._client: redis.Redis | None = None
 
@@ -68,21 +68,127 @@ class RedisStorage:
             )
         return self._client
 
-    def read(self) -> dict[str, Any]:
-        raw_data = self.client.get(self.key)
-        if not raw_data:
-            return self._default_data()
+    @property
+    def _companies_key(self) -> str:
+        return f"{self.key_prefix}:companies"
 
-        data = json.loads(raw_data)
-        if not isinstance(data, dict):
-            return self._default_data()
-        data.setdefault("companies", [])
-        data.setdefault("meta", {})
-        data.setdefault("settings", {})
-        return data
+    @property
+    def _meta_key(self) -> str:
+        return f"{self.key_prefix}:meta"
+
+    @property
+    def _next_id_key(self) -> str:
+        return f"{self.key_prefix}:next_id"
+
+    def _next_id(self) -> int:
+        return self.client.incr(self._next_id_key)
+
+    def read(self) -> dict[str, Any]:
+        legacy_state = self._read_legacy_state()
+        companies = self._read_company_hash()
+        if not companies:
+            companies = legacy_state.get("companies", [])
+
+        meta_raw = self.client.hgetall(self._meta_key)
+        meta = dict(meta_raw) if meta_raw else legacy_state.get("meta", {})
+
+        return {
+            "companies": sorted(companies, key=lambda x: x.get("updated_at") or "", reverse=True),
+            "meta": meta,
+            "settings": legacy_state.get("settings", {}),
+        }
 
     def write(self, data: dict[str, Any]) -> None:
-        self.client.set(self.key, json.dumps(data, ensure_ascii=False))
+        companies = data.get("companies", [])
+        company_mapping = {
+            str(company["id"]): json.dumps(company, ensure_ascii=False)
+            for company in companies
+            if company.get("id")
+        }
+
+        company_key_type = self._key_type(self._companies_key)
+        existing_fields = set(self.client.hkeys(self._companies_key)) if company_key_type == "hash" else set()
+        stale_fields = existing_fields - set(company_mapping)
+
+        pipeline = self.client.pipeline()
+        if company_key_type not in {"none", "hash"}:
+            pipeline.delete(self._companies_key)
+        elif stale_fields:
+            pipeline.hdel(self._companies_key, *stale_fields)
+
+        if company_mapping:
+            pipeline.hset(self._companies_key, mapping=company_mapping)
+        else:
+            pipeline.delete(self._companies_key)
+
+        meta = data.get("meta", {})
+        pipeline.delete(self._meta_key)
+        if meta:
+            pipeline.hset(self._meta_key, mapping={key: str(value) for key, value in meta.items()})
+
+        legacy_keys = [key for key in self.client.scan_iter(f"{self.key_prefix}:companies:*")]
+        legacy_state_key = f"{self.key_prefix}/companies"
+        if legacy_state_key != self._companies_key and self._key_type(legacy_state_key) != "none":
+            legacy_keys.append(legacy_state_key)
+        if legacy_keys:
+            pipeline.delete(*legacy_keys)
+
+        pipeline.execute()
+
+    def _read_company_hash(self) -> list[dict[str, Any]]:
+        if self._key_type(self._companies_key) != "hash":
+            return []
+
+        companies: list[dict[str, Any]] = []
+        for raw in self.client.hgetall(self._companies_key).values():
+            try:
+                item = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(item, dict):
+                companies.append(item)
+        return companies
+
+    def _read_legacy_state(self) -> dict[str, Any]:
+        for key in (self._companies_key, f"{self.key_prefix}/companies"):
+            if self._key_type(key) != "string":
+                continue
+            try:
+                raw_data = self.client.get(key)
+                if not raw_data:
+                    continue
+                data = json.loads(raw_data)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict):
+                data.setdefault("companies", [])
+                data.setdefault("meta", {})
+                data.setdefault("settings", {})
+                return data
+
+        companies = []
+        for key in self.client.scan_iter(f"{self.key_prefix}:companies:*"):
+            try:
+                raw_data = self.client.get(key)
+                if not raw_data:
+                    continue
+                item = json.loads(raw_data)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(item, dict):
+                companies.append(item)
+
+        return {
+            "companies": companies,
+            "meta": {},
+            "settings": {},
+        }
+
+    def _key_type(self, key: str) -> str:
+        key_type = self.client.type(key)
+        if isinstance(key_type, bytes):
+            return key_type.decode("utf-8")
+        return str(key_type)
 
     @staticmethod
     def _default_data() -> dict[str, Any]:
