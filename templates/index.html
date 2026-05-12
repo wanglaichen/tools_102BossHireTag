@@ -10,9 +10,10 @@
 <body>
     <div class="app-shell">
         <header class="topbar">
-            <div>
+            <div class="hero-copy">
                 <p class="eyebrow">Resume Delivery Tracker</p>
                 <h1>简历投递公司标记</h1>
+                <p>配置效果状态和行业字典，记录投递结果、猎头、外包、面试状态，并支持双击直接编辑。</p>
             </div>
             <div class="metrics">
                 <article>
@@ -28,11 +29,26 @@
                     <strong id="hunterCount">0</strong>
                 </article>
                 <article>
+                    <span>外包</span>
+                    <strong id="outsourcedCount">0</strong>
+                </article>
+                <article>
+                    <span>已面试</span>
+                    <strong id="interviewedCount">0</strong>
+                </article>
+                <article>
                     <span>需跟进</span>
                     <strong id="followUpCount">0</strong>
                 </article>
             </div>
         </header>
+
+        <div class="proxy-bar" id="proxyBar">
+            <span class="proxy-label">代理设置</span>
+            <input id="proxyInput" class="form-control form-control-sm" placeholder="http://127.0.0.1:7890" style="width:260px;">
+            <button class="btn btn-sm btn-outline-primary" id="saveProxyBtn">保存</button>
+            <span class="proxy-status" id="proxyStatus"></span>
+        </div>
 
         <div class="alert alert-danger d-none" id="errorBox"></div>
         <div class="alert alert-success d-none" id="successBox"></div>
@@ -50,15 +66,33 @@
                     </label>
                     <label>
                         <span>效果状态</span>
-                        <input id="effectStatusInput" class="form-control" list="statusList" placeholder="拒绝 / 加微信 / 在考虑">
+                        <select id="effectStatusInput" class="form-select" multiple size="3"></select>
                     </label>
                     <label>
                         <span>行业</span>
-                        <input id="industryInput" class="form-control" list="industryList" placeholder="棋牌 / 游戏 / 互联网">
+                        <select id="industryInput" class="form-select" multiple size="3"></select>
                     </label>
+                    <div class="grid-two">
+                        <label>
+                            <span>是否是猎头</span>
+                            <select id="hunterInput" class="form-select">
+                                <option value="unknown">未标记</option>
+                                <option value="yes">是</option>
+                                <option value="no">否</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>是否是外包</span>
+                            <select id="outsourcedInput" class="form-select">
+                                <option value="unknown">未标记</option>
+                                <option value="yes">是</option>
+                                <option value="no">否</option>
+                            </select>
+                        </label>
+                    </div>
                     <label>
-                        <span>是否是猎头</span>
-                        <select id="hunterInput" class="form-select">
+                        <span>是否已面试</span>
+                        <select id="interviewedInput" class="form-select">
                             <option value="unknown">未标记</option>
                             <option value="yes">是</option>
                             <option value="no">否</option>
@@ -76,8 +110,37 @@
                     <div class="panel-title compact">
                         <h2>批量粘贴</h2>
                     </div>
-                    <textarea id="bulkImportInput" class="form-control" rows="7" placeholder="从 Excel 复制表格行，列顺序：企业名称、效果状态、行业、是否是猎头、备注"></textarea>
+                    <textarea id="bulkImportInput" class="form-control" rows="7" placeholder="从 Excel 复制表格行，列顺序：企业名称、效果状态、行业、是否是猎头、是否是外包、是否已面试、备注"></textarea>
                     <button class="btn btn-outline-primary w-100" id="importButton" type="button">导入 / 更新</button>
+                </div>
+
+                <div class="config-box">
+                    <div class="panel-title compact">
+                        <h2>可配置选项</h2>
+                        <span>变更后直接写入 Redis</span>
+                    </div>
+                    <div class="config-section">
+                        <div class="config-head">
+                            <span>效果状态</span>
+                            <small>用于表单提示和筛选</small>
+                        </div>
+                        <div class="config-input-row">
+                            <input id="newStatusInput" class="form-control" placeholder="添加新的状态类型">
+                            <button class="btn btn-outline-primary" id="addStatusButton" type="button">添加</button>
+                        </div>
+                        <div id="statusChips" class="chip-list"></div>
+                    </div>
+                    <div class="config-section">
+                        <div class="config-head">
+                            <span>行业</span>
+                            <small>用于表单提示和筛选</small>
+                        </div>
+                        <div class="config-input-row">
+                            <input id="newIndustryInput" class="form-control" placeholder="添加新的行业类型">
+                            <button class="btn btn-outline-primary" id="addIndustryButton" type="button">添加</button>
+                        </div>
+                        <div id="industryChips" class="chip-list"></div>
+                    </div>
                 </div>
             </section>
 
@@ -110,13 +173,15 @@
                                 <th>效果状态</th>
                                 <th>行业</th>
                                 <th>是否是猎头</th>
+                                <th>是否是外包</th>
+                                <th>是否已面试</th>
                                 <th>备注</th>
                                 <th>更新时间</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
                         <tbody id="companyTableBody">
-                            <tr><td colspan="7" class="empty-cell">暂无记录</td></tr>
+                            <tr><td colspan="9" class="empty-cell">暂无记录</td></tr>
                         </tbody>
                     </table>
                 </div>

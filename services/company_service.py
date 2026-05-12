@@ -14,6 +14,29 @@ FIELD_LIMITS = {
     "note": 500,
 }
 
+DEFAULT_SETTINGS = {
+    "status_options": ["拒绝", "加微信", "在考虑"],
+    "industry_options": ["棋牌", "游戏", "互联网"],
+}
+
+HEADER_ALIASES = {
+    "企业名称": "company_name",
+    "公司名称": "company_name",
+    "效果状态": "effect_status",
+    "行业": "industry",
+    "是否是猎头": "is_hunter",
+    "是否是外包": "is_outsourced",
+    "是否已面试": "is_interviewed",
+    "备注": "note",
+    "company_name": "company_name",
+    "effect_status": "effect_status",
+    "industry": "industry",
+    "is_hunter": "is_hunter",
+    "is_outsourced": "is_outsourced",
+    "is_interviewed": "is_interviewed",
+    "note": "note",
+}
+
 
 class CompanyService:
     def __init__(self, storage: JsonStorage | RedisStorage) -> None:
@@ -24,33 +47,70 @@ class CompanyService:
         return cls(create_storage(config))
 
     def list_companies(self) -> list[dict[str, Any]]:
-        items = self.storage.read()["companies"]
+        items = self._read_state()["companies"]
         return sorted(items, key=lambda item: item.get("updated_at") or "", reverse=True)
+
+    def get_settings(self) -> dict[str, Any]:
+        data = self._read_state()
+        settings = self._normalize_settings(data.get("settings", {}))
+        if data.get("settings") != settings:
+            data["settings"] = settings
+            data["meta"]["last_changed_at"] = self._now()
+            self.storage.write(data)
+        return settings
+
+    def update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = self._read_state()
+        current = self._normalize_settings(data.get("settings", {}))
+        next_settings = {
+            "status_options": self._normalize_options(payload.get("status_options"), current["status_options"]),
+            "industry_options": self._normalize_options(payload.get("industry_options"), current["industry_options"]),
+        }
+        data["settings"] = next_settings
+        data["meta"]["last_changed_at"] = self._now()
+        self.storage.write(data)
+        return next_settings
 
     def get_summary(self) -> dict[str, Any]:
         items = self.list_companies()
-        statuses = sorted({item.get("effect_status", "") for item in items if item.get("effect_status")})
-        industries = sorted({item.get("industry", "") for item in items if item.get("industry")})
-        rejected_count = sum(1 for item in items if "拒绝" in item.get("effect_status", ""))
+        statuses = set()
+        industries = set()
+        for item in items:
+            for s in (item.get("effect_status") or "").split(","):
+                s = s.strip()
+                if s:
+                    statuses.add(s)
+            for i in (item.get("industry") or "").split(","):
+                i = i.strip()
+                if i:
+                    industries.add(i)
+
+        settings = self.get_settings()
+        rejected_count = sum(1 for item in items if any("拒绝" in s for s in (item.get("effect_status") or "").split(",")))
         hunter_count = sum(1 for item in items if item.get("is_hunter") == "yes")
+        outsourced_count = sum(1 for item in items if item.get("is_outsourced") == "yes")
+        interviewed_count = sum(1 for item in items if item.get("is_interviewed") == "yes")
         follow_up_count = sum(
             1
             for item in items
-            if item.get("effect_status") and "拒绝" not in item.get("effect_status", "")
+            if item.get("effect_status") and not any("拒绝" in s for s in (item.get("effect_status") or "").split(","))
         )
 
         return {
             "company_count": len(items),
             "rejected_count": rejected_count,
             "hunter_count": hunter_count,
+            "outsourced_count": outsourced_count,
+            "interviewed_count": interviewed_count,
             "follow_up_count": follow_up_count,
-            "statuses": statuses,
-            "industries": industries,
+            "statuses": sorted(set(settings["status_options"]) | statuses),
+            "industries": sorted(set(settings["industry_options"]) | industries),
+            "settings": settings,
             "last_updated_at": max((item.get("updated_at") or "" for item in items), default=""),
         }
 
     def create_company(self, payload: dict[str, Any]) -> dict[str, Any]:
-        data = self.storage.read()
+        data = self._read_state()
         company_name = self._clean_text(payload.get("company_name"), FIELD_LIMITS["company_name"])
         if not company_name:
             raise ValueError("企业名称不能为空")
@@ -58,23 +118,14 @@ class CompanyService:
             raise ValueError("企业名称已存在，请编辑原记录")
 
         now = self._now()
-        record = {
-            "id": str(uuid.uuid4()),
-            "company_name": company_name,
-            "effect_status": self._clean_text(payload.get("effect_status"), FIELD_LIMITS["effect_status"]),
-            "industry": self._clean_text(payload.get("industry"), FIELD_LIMITS["industry"]),
-            "is_hunter": self._normalize_hunter(payload.get("is_hunter")),
-            "note": self._clean_text(payload.get("note"), FIELD_LIMITS["note"]),
-            "created_at": now,
-            "updated_at": now,
-        }
+        record = self._build_record(payload, company_name=company_name, now=now)
         data["companies"].append(record)
         data["meta"]["last_changed_at"] = now
         self.storage.write(data)
         return record
 
     def update_company(self, company_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        data = self.storage.read()
+        data = self._read_state()
         record = self._find_by_id(data["companies"], company_id)
         if not record:
             raise ValueError("记录不存在")
@@ -92,8 +143,9 @@ class CompanyService:
             if field in payload:
                 record[field] = self._clean_text(payload.get(field), FIELD_LIMITS[field])
 
-        if "is_hunter" in payload:
-            record["is_hunter"] = self._normalize_hunter(payload.get("is_hunter"))
+        for field in ("is_hunter", "is_outsourced", "is_interviewed"):
+            if field in payload:
+                record[field] = self._normalize_flag(payload.get(field))
 
         now = self._now()
         record["updated_at"] = now
@@ -102,7 +154,7 @@ class CompanyService:
         return record
 
     def delete_company(self, company_id: str) -> dict[str, Any]:
-        data = self.storage.read()
+        data = self._read_state()
         before_count = len(data["companies"])
         data["companies"] = [item for item in data["companies"] if item.get("id") != company_id]
         if len(data["companies"]) == before_count:
@@ -116,7 +168,7 @@ class CompanyService:
         if not text.strip():
             raise ValueError("导入内容不能为空")
 
-        data = self.storage.read()
+        data = self._read_state()
         rows = self._parse_rows(text)
         imported_count = 0
         updated_count = 0
@@ -158,20 +210,45 @@ class CompanyService:
     def export_csv(self) -> str:
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["企业名称", "效果状态", "行业", "是否是猎头", "备注", "创建时间", "更新时间"])
+        writer.writerow(
+            ["企业名称", "效果状态", "行业", "是否是猎头", "是否是外包", "是否已面试", "备注", "创建时间", "更新时间"]
+        )
         for item in self.list_companies():
             writer.writerow(
                 [
                     item.get("company_name", ""),
                     item.get("effect_status", ""),
                     item.get("industry", ""),
-                    self._display_hunter(item.get("is_hunter")),
+                    self._display_flag(item.get("is_hunter")),
+                    self._display_flag(item.get("is_outsourced")),
+                    self._display_flag(item.get("is_interviewed")),
                     item.get("note", ""),
                     item.get("created_at", ""),
                     item.get("updated_at", ""),
                 ]
             )
         return output.getvalue()
+
+    def _read_state(self) -> dict[str, Any]:
+        data = self.storage.read()
+        data.setdefault("companies", [])
+        data.setdefault("meta", {})
+        data.setdefault("settings", {})
+        return data
+
+    def _build_record(self, payload: dict[str, Any], company_name: str, now: str) -> dict[str, Any]:
+        return {
+            "id": str(uuid.uuid4()),
+            "company_name": company_name,
+            "effect_status": self._clean_text(payload.get("effect_status"), FIELD_LIMITS["effect_status"]),
+            "industry": self._clean_text(payload.get("industry"), FIELD_LIMITS["industry"]),
+            "is_hunter": self._normalize_flag(payload.get("is_hunter")),
+            "is_outsourced": self._normalize_flag(payload.get("is_outsourced")),
+            "is_interviewed": self._normalize_flag(payload.get("is_interviewed")),
+            "note": self._clean_text(payload.get("note"), FIELD_LIMITS["note"]),
+            "created_at": now,
+            "updated_at": now,
+        }
 
     def _parse_rows(self, text: str) -> list[list[str]]:
         sample = text.strip()
@@ -191,13 +268,36 @@ class CompanyService:
         if not company_name:
             return None
 
+        effect_status = self._get_row_value(row, 1, None)
+        industry = self._get_row_value(row, 2, None)
+        is_hunter = self._get_row_value(row, 3, None)
+        is_outsourced = self._get_row_value(row, 4, None)
+        is_interviewed = self._get_row_value(row, 5, None)
+        note = self._get_row_value(row, 6, None)
+
+        if len(row) == 5:
+            note = self._get_row_value(row, 4, "")
+            is_outsourced = ""
+            is_interviewed = ""
+        elif len(row) == 6:
+            note = self._get_row_value(row, 5, "")
+            is_interviewed = ""
+
         return {
             "company_name": company_name,
-            "effect_status": self._clean_text(row[1] if len(row) > 1 else "", FIELD_LIMITS["effect_status"]),
-            "industry": self._clean_text(row[2] if len(row) > 2 else "", FIELD_LIMITS["industry"]),
-            "is_hunter": self._normalize_hunter(row[3] if len(row) > 3 else ""),
-            "note": self._clean_text(row[4] if len(row) > 4 else "", FIELD_LIMITS["note"]),
+            "effect_status": self._clean_text(effect_status, FIELD_LIMITS["effect_status"]),
+            "industry": self._clean_text(industry, FIELD_LIMITS["industry"]),
+            "is_hunter": self._normalize_flag(is_hunter),
+            "is_outsourced": self._normalize_flag(is_outsourced),
+            "is_interviewed": self._normalize_flag(is_interviewed),
+            "note": self._clean_text(note, FIELD_LIMITS["note"]),
         }
+
+    @staticmethod
+    def _get_row_value(row: list[str], index: int, default: str | None = "") -> str:
+        if index >= len(row):
+            return "" if default is None else default
+        return row[index].strip()
 
     @staticmethod
     def _clean_text(value: Any, max_length: int) -> str:
@@ -206,21 +306,48 @@ class CompanyService:
         return str(value).strip()[:max_length]
 
     @staticmethod
-    def _normalize_hunter(value: Any) -> str:
+    def _normalize_flag(value: Any) -> str:
         text = str(value or "").strip().lower()
-        if text in {"yes", "y", "true", "1", "是", "猎头"}:
+        if text in {"yes", "y", "true", "1", "是", "有", "已", "已是"}:
             return "yes"
-        if text in {"no", "n", "false", "0", "否", "不是", "非猎头"}:
+        if text in {"no", "n", "false", "0", "否", "没有", "未", "不是"}:
             return "no"
         return "unknown"
 
     @staticmethod
-    def _display_hunter(value: str | None) -> str:
+    def _display_flag(value: str | None) -> str:
         if value == "yes":
             return "是"
         if value == "no":
             return "否"
         return ""
+
+    @staticmethod
+    def _normalize_options(value: Any, fallback: list[str]) -> list[str]:
+        if isinstance(value, list):
+            items = [str(item).strip() for item in value]
+            items = [item for item in items if item]
+            if items:
+                seen: set[str] = set()
+                ordered: list[str] = []
+                for item in items:
+                    key = item.casefold()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    ordered.append(item)
+                return ordered[:50]
+        return list(fallback)
+
+    def _normalize_settings(self, value: Any) -> dict[str, list[str]]:
+        if not isinstance(value, dict):
+            value = {}
+        return {
+            "status_options": self._normalize_options(value.get("status_options"), DEFAULT_SETTINGS["status_options"]),
+            "industry_options": self._normalize_options(
+                value.get("industry_options"), DEFAULT_SETTINGS["industry_options"]
+            ),
+        }
 
     @staticmethod
     def _find_by_id(items: list[dict[str, Any]], company_id: str) -> dict[str, Any] | None:

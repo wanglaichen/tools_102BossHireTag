@@ -1,15 +1,16 @@
 # tools_102BossHireTag
 
-简历投递公司标记工具，用来记录投递过的企业、沟通效果、行业、是否猎头和备注。界面按 Excel 表格习惯设计，支持单条新增、编辑、删除、批量粘贴导入、筛选搜索，以及导出 CSV/JSON。
+简历投递公司标记工具，用来记录投递过的企业、沟通效果、行业、是否猎头、是否外包、是否已面试和备注。界面按 Excel 表格习惯设计，支持单条新增、编辑、删除、双击编辑、批量粘贴导入、筛选搜索，以及导出 CSV/JSON。
 
 ## 功能
 
-- 记录字段：企业名称、效果状态、行业、是否是猎头、备注。
-- 支持从 Excel 复制多行直接粘贴导入，列顺序为：企业名称、效果状态、行业、是否是猎头、备注。
+- 记录字段：企业名称、效果状态、行业、是否是猎头、是否是外包、是否已面试、备注。
+- 支持从 Excel 复制多行直接粘贴导入，列顺序为：企业名称、效果状态、行业、是否是猎头、是否是外包、是否已面试、备注。
 - 同名企业导入时会更新原记录，避免重复。
 - 支持按关键字、效果状态、猎头类型筛选。
 - 支持导出 CSV 和 JSON。
-- 优先使用 Redis 存储，key 统一放在 `jjob/tools102-boss-hire-tag/` 前缀下。
+- 优先使用 Redis 存储，key 统一放在 `jjob/tools102-boss-hire-tag/state` 前缀下。
+- 支持配置效果状态和行业选项，配置数据也保存在 Redis。
 - 未配置 Redis 时回退到本地 `data/companies.json`，方便本地开发。
 - 支持通过环境变量设置进程代理。
 - 使用 Git tag 自动发布到 Vercel。
@@ -43,7 +44,7 @@ cp env.example .env
 APP_HOST=0.0.0.0
 APP_PORT=9212
 REDIS_URL=你的 Redis 连接串
-REDIS_KEY_PREFIX=jjob/tools102-boss-hire-tag
+REDIS_KEY_PREFIX=jjob/tools102-boss-hire-tag/state
 REDIS_TIMEOUT_SECONDS=5
 ```
 
@@ -54,6 +55,15 @@ auto  有 REDIS_URL 时用 Redis，否则用本地 JSON
 redis 强制使用 Redis，未配置 REDIS_URL 会报错
 json  强制使用本地 JSON
 ```
+
+## 配置接口
+
+页面里的“可配置选项”会直接调用接口保存配置：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/settings` | 获取效果状态和行业选项 |
+| `PATCH` | `/api/settings` | 更新效果状态和行业选项 |
 
 启动：
 
@@ -70,8 +80,31 @@ http://localhost:9212
 也可以使用脚本启动：
 
 ```bash
-./start.sh
+./restart.sh start
 ```
+
+Windows 下用 Git Bash 执行同一个脚本：
+
+```bash
+./restart.sh start
+```
+
+这个脚本会先停掉占用 `APP_PORT` 的旧 Python 进程，再后台启动监控进程，进程退出后自动重启。
+Linux 上第一次使用前先执行：
+
+```bash
+chmod +x restart.sh
+```
+
+可用命令：
+
+```bash
+./restart.sh status
+./restart.sh stop
+./restart.sh restart
+```
+
+Linux 和 Windows Git Bash 都可以直接用同一个脚本。
 
 ## 代理配置
 
@@ -100,7 +133,7 @@ all_proxy
 
 ```text
 REDIS_URL
-REDIS_KEY_PREFIX=jjob/tools102-boss-hire-tag
+REDIS_KEY_PREFIX=jjob/tools102-boss-hire-tag/state
 ```
 
 如需代理，也可以配置：

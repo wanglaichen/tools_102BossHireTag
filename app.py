@@ -1,16 +1,45 @@
 import json
+import os
+from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 from config import AppConfig
 from services.company_service import CompanyService
+from services.storage import QuickFallbackStorage, JsonStorage, RedisProxyStore, RedisSettingsStore, RedisStorage
 
 
 app = Flask(__name__)
 app.config.from_object(AppConfig)
 
+
+def create_storage(config: dict[str, Any]) -> JsonStorage | RedisStorage | QuickFallbackStorage:
+    backend = config.get("STORAGE_BACKEND", "auto").strip().lower()
+    if backend == "json":
+        return JsonStorage(config["STORAGE_FILE"])
+
+    redis_url = config.get("REDIS_URL", "").strip()
+    json_path = config.get("STORAGE_FILE", "")
+
+    if redis_url:
+        redis_storage = RedisStorage(
+            redis_url,
+            config.get("REDIS_KEY_PREFIX", "jjob/tools102-boss-hire-tag/state"),
+            float(config.get("REDIS_TIMEOUT_SECONDS", 5)),
+        )
+        if json_path:
+            json_storage = JsonStorage(json_path)
+            return QuickFallbackStorage(redis_storage, json_storage)
+        return redis_storage
+
+    if backend == "redis" and not redis_url:
+        raise StorageUnavailable("STORAGE_BACKEND=redis 时必须配置 REDIS_URL")
+    return JsonStorage(json_path or "data/companies.json")
+
+
 company_service = CompanyService.from_app_config(app.config)
+company_service.storage = create_storage(AppConfig.__dict__)
 
 
 @app.errorhandler(ValueError)
@@ -41,6 +70,62 @@ def index():
 @app.route("/api/summary", methods=["GET"])
 def summary():
     return jsonify(company_service.get_summary())
+
+
+def _proxy_store():
+    return RedisProxyStore(
+        AppConfig.REDIS_URL,
+        AppConfig.REDIS_PROXY_KEY,
+        AppConfig.REDIS_TIMEOUT_SECONDS,
+    )
+
+
+def _settings_store():
+    return RedisSettingsStore(
+        AppConfig.REDIS_URL,
+        AppConfig.REDIS_SETTINGS_KEY,
+        AppConfig.REDIS_TIMEOUT_SECONDS,
+    )
+
+
+@app.route("/api/settings", methods=["GET"])
+def get_settings():
+    store = _settings_store()
+    settings = store.get_settings()
+    return jsonify(settings)
+
+
+@app.route("/api/settings", methods=["PATCH"])
+def update_settings():
+    payload = request.get_json(silent=True) or {}
+    store = _settings_store()
+    current = store.get_settings()
+    next_settings = {
+        "status_options": _normalize_options(payload.get("status_options"), current.get("status_options", ["拒绝", "加微信", "在考虑"])),
+        "industry_options": _normalize_options(payload.get("industry_options"), current.get("industry_options", ["棋牌", "游戏", "互联网"])),
+    }
+    store.save_settings(next_settings)
+    return jsonify({
+        "message": "配置已保存",
+        "settings": next_settings,
+        "summary": company_service.get_summary(),
+    })
+
+
+def _normalize_options(value: Any, fallback: list) -> list:
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value]
+        items = [item for item in items if item]
+        if items:
+            seen = set()
+            ordered = []
+            for item in items:
+                key = item.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    ordered.append(item)
+            return ordered[:50]
+    return list(fallback)
 
 
 @app.route("/api/companies", methods=["GET"])
@@ -75,9 +160,9 @@ def import_companies():
 
 @app.route("/api/companies/export.csv", methods=["GET"])
 def export_companies_csv():
-    body = "\ufeff" + company_service.export_csv()
+    body = company_service.export_csv()
     return Response(
-        body,
+        body.encode("utf-8-sig"),
         mimetype="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=resume-company-tags.csv"},
     )
@@ -118,5 +203,50 @@ def delete_company(company_id: str):
     )
 
 
+def _proxy_store():
+    return RedisProxyStore(
+        AppConfig.REDIS_URL,
+        AppConfig.REDIS_PROXY_KEY,
+        AppConfig.REDIS_TIMEOUT_SECONDS,
+    )
+
+
+@app.route("/api/proxy", methods=["GET"])
+def get_proxy():
+    proxy_store = _proxy_store()
+    return jsonify({
+        "proxy_url": proxy_store.get_proxy(),
+        "using_fallback": getattr(company_service.storage, "using_fallback", False),
+    })
+
+
+@app.route("/api/proxy", methods=["POST"])
+def set_proxy():
+    payload = request.get_json(silent=True) or {}
+    proxy_url = (payload.get("proxy_url") or "").strip()
+    proxy_store = _proxy_store()
+    proxy_store.set_proxy(proxy_url)
+
+    if proxy_url:
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+            os.environ[name] = proxy_url
+            os.environ[name.lower()] = proxy_url
+        os.environ["APP_PROXY_URL"] = proxy_url
+    else:
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "APP_PROXY_URL"):
+            os.environ.pop(name, None)
+
+    return jsonify({
+        "message": "代理设置已保存，重启应用后生效" if proxy_url else "代理设置已清除，重启应用后生效",
+        "proxy_url": proxy_url,
+    })
+
+
 if __name__ == "__main__":
-    app.run(debug=True, host=app.config["APP_HOST"], port=app.config["APP_PORT"])
+    debug_enabled = os.getenv("APP_DEBUG", "0") == "1"
+    app.run(
+        debug=debug_enabled,
+        use_reloader=False,
+        host=app.config["APP_HOST"],
+        port=app.config["APP_PORT"],
+    )
