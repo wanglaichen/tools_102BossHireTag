@@ -1,6 +1,5 @@
 import json
 import os
-from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
@@ -14,7 +13,12 @@ app = Flask(__name__)
 app.config.from_object(AppConfig)
 
 
-company_service = CompanyService(create_storage(AppConfig.__dict__))
+settings_store = RedisSettingsStore(
+    AppConfig.REDIS_URL,
+    AppConfig.REDIS_SETTINGS_KEY,
+    AppConfig.REDIS_TIMEOUT_SECONDS,
+)
+company_service = CompanyService(create_storage(AppConfig.__dict__), settings_store=settings_store)
 
 
 @app.errorhandler(ValueError)
@@ -55,52 +59,20 @@ def _proxy_store():
     )
 
 
-def _settings_store():
-    return RedisSettingsStore(
-        AppConfig.REDIS_URL,
-        AppConfig.REDIS_SETTINGS_KEY,
-        AppConfig.REDIS_TIMEOUT_SECONDS,
-    )
-
-
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    store = _settings_store()
-    settings = store.get_settings()
-    return jsonify(settings)
+    return jsonify(company_service.get_settings())
 
 
 @app.route("/api/settings", methods=["PATCH"])
 def update_settings():
     payload = request.get_json(silent=True) or {}
-    store = _settings_store()
-    current = store.get_settings()
-    next_settings = {
-        "status_options": _normalize_options(payload.get("status_options"), current.get("status_options", ["拒绝", "加微信", "在考虑"])),
-        "industry_options": _normalize_options(payload.get("industry_options"), current.get("industry_options", ["棋牌", "游戏", "互联网"])),
-    }
-    store.save_settings(next_settings)
+    next_settings = company_service.update_settings(payload)
     return jsonify({
         "message": "配置已保存",
         "settings": next_settings,
         "summary": company_service.get_summary(),
     })
-
-
-def _normalize_options(value: Any, fallback: list) -> list:
-    if isinstance(value, list):
-        items = [str(item).strip() for item in value]
-        items = [item for item in items if item]
-        if items:
-            seen = set()
-            ordered = []
-            for item in items:
-                key = item.casefold()
-                if key not in seen:
-                    seen.add(key)
-                    ordered.append(item)
-            return ordered[:50]
-    return list(fallback)
 
 
 @app.route("/api/companies", methods=["GET"])

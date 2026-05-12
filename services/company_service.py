@@ -39,8 +39,9 @@ HEADER_ALIASES = {
 
 
 class CompanyService:
-    def __init__(self, storage: JsonStorage | RedisStorage) -> None:
+    def __init__(self, storage: JsonStorage | RedisStorage, settings_store: Any | None = None) -> None:
         self.storage = storage
+        self.settings_store = settings_store
 
     @classmethod
     def from_app_config(cls, config: dict[str, Any]) -> "CompanyService":
@@ -51,6 +52,9 @@ class CompanyService:
         return sorted(items, key=lambda item: item.get("updated_at") or "", reverse=True)
 
     def get_settings(self) -> dict[str, Any]:
+        if self.settings_store is not None:
+            return self._normalize_settings(self.settings_store.get_settings())
+
         data = self._read_state()
         settings = self._normalize_settings(data.get("settings", {}))
         if data.get("settings") != settings:
@@ -60,6 +64,15 @@ class CompanyService:
         return settings
 
     def update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.settings_store is not None:
+            current = self.get_settings()
+            next_settings = {
+                "status_options": self._normalize_options(payload.get("status_options"), current["status_options"]),
+                "industry_options": self._normalize_options(payload.get("industry_options"), current["industry_options"]),
+            }
+            self.settings_store.save_settings(next_settings)
+            return next_settings
+
         data = self._read_state()
         current = self._normalize_settings(data.get("settings", {}))
         next_settings = {
