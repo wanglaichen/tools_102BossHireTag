@@ -44,6 +44,15 @@ APP_HOST=0.0.0.0
 APP_PORT=9212
 REDIS_URL=你的 Redis 连接串
 REDIS_KEY_PREFIX=jjob/tools102-boss-hire-tag
+REDIS_TIMEOUT_SECONDS=5
+```
+
+`STORAGE_BACKEND` 支持：
+
+```text
+auto  有 REDIS_URL 时用 Redis，否则用本地 JSON
+redis 强制使用 Redis，未配置 REDIS_URL 会报错
+json  强制使用本地 JSON
 ```
 
 启动：

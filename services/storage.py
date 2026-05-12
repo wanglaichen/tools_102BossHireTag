@@ -48,10 +48,16 @@ class JsonStorage:
 
 
 class RedisStorage:
-    def __init__(self, url: str, key_prefix: str) -> None:
+    def __init__(self, url: str, key_prefix: str, timeout_seconds: float = 5) -> None:
         if redis is None:
             raise StorageUnavailable("redis 依赖未安装，请先执行 pip install -r requirements.txt")
-        self.client = redis.Redis.from_url(url, decode_responses=True)
+        self.client = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=timeout_seconds,
+            socket_timeout=timeout_seconds,
+            health_check_interval=30,
+        )
         self.key = f"{key_prefix.rstrip('/')}/companies"
 
     def read(self) -> dict[str, Any]:
@@ -75,7 +81,17 @@ class RedisStorage:
 
 
 def create_storage(config: dict[str, Any]) -> JsonStorage | RedisStorage:
+    backend = config.get("STORAGE_BACKEND", "auto").strip().lower()
+    if backend == "json":
+        return JsonStorage(config["STORAGE_FILE"])
+
     redis_url = config.get("REDIS_URL", "").strip()
+    if backend == "redis" and not redis_url:
+        raise StorageUnavailable("STORAGE_BACKEND=redis 时必须配置 REDIS_URL")
     if redis_url:
-        return RedisStorage(redis_url, config.get("REDIS_KEY_PREFIX", "jjob/tools102-boss-hire-tag"))
+        return RedisStorage(
+            redis_url,
+            config.get("REDIS_KEY_PREFIX", "jjob/tools102-boss-hire-tag"),
+            float(config.get("REDIS_TIMEOUT_SECONDS", 5)),
+        )
     return JsonStorage(config["STORAGE_FILE"])

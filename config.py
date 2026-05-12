@@ -56,6 +56,8 @@ class AppConfig:
     APP_PORT = int(os.getenv("APP_PORT", os.getenv("PORT", "9212")))
     DATA_DIR = str(DATA_PATH)
     STORAGE_FILE = str(DATA_PATH / "companies.json")
+    STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "auto")
     REDIS_URL = os.getenv("REDIS_URL", "")
     REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "jjob/tools102-boss-hire-tag")
+    REDIS_TIMEOUT_SECONDS = float(os.getenv("REDIS_TIMEOUT_SECONDS", "5"))
     APP_PROXY_URL = os.getenv("APP_PROXY_URL", "")
