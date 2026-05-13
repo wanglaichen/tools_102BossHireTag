@@ -177,8 +177,11 @@ function renderStatusFilter(values) {
 
 function getFilteredCompanies() {
     const keyword = byId("searchInput").value.trim().toLowerCase();
-    const status = byId("statusFilter").value;
+    const statusSelect = byId("statusFilter");
+    const selectedStatuses = Array.from(statusSelect.selectedOptions).map(o => o.value).filter(Boolean);
+    const statusFilterAll = selectedStatuses.includes("") || selectedStatuses.length === 0;
     const hunter = byId("hunterFilter").value;
+    const outsourced = byId("outsourcedFilter").value;
 
     return state.companies.filter((item) => {
         const searchable = [
@@ -195,9 +198,11 @@ function getFilteredCompanies() {
 
         const itemStatuses = (item.effect_status || "").split(",").map(s => s.trim());
 
-        return (!keyword || searchable.includes(keyword))
-            && (!status || itemStatuses.includes(status))
-            && (!hunter || item.is_hunter === hunter);
+        const matchStatus = statusFilterAll || itemStatuses.some(s => selectedStatuses.includes(s));
+        const matchHunter = !hunter || item.is_hunter === hunter;
+        const matchOutsourced = !outsourced || item.is_outsourced === outsourced;
+
+        return (!keyword || searchable.includes(keyword)) && matchStatus && matchHunter && matchOutsourced;
     });
 }
 
