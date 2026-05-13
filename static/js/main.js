@@ -409,6 +409,8 @@ async function boot() {
     byId("statusFilter").addEventListener("change", renderCompanies);
     byId("hunterFilter").addEventListener("change", renderCompanies);
     byId("saveProxyBtn").addEventListener("click", saveProxy);
+    byId("proxyEnableCheck").addEventListener("change", toggleProxyInput);
+    byId("refreshCompaniesBtn").addEventListener("click", refreshCompanies);
 
     try {
         await loadProxySettings();
@@ -422,24 +424,66 @@ async function boot() {
 async function loadProxySettings() {
     try {
         const data = await requestJson("/api/proxy");
-        byId("proxyInput").value = data.proxy_url || "";
-        const bar = byId("proxyBar");
+        const proxyUrl = data.proxy_url || "";
+        const check = byId("proxyEnableCheck");
+        const input = byId("proxyInput");
+        const btn = byId("saveProxyBtn");
         const status = byId("proxyStatus");
-        bar.style.display = "flex";
+
+        byId("proxyBar").style.display = "flex";
+
+        if (proxyUrl) {
+            check.checked = true;
+            input.classList.remove("d-none");
+            btn.classList.remove("d-none");
+            input.value = proxyUrl;
+            status.textContent = "✓ 代理已配置";
+            status.className = "proxy-status ok";
+        } else {
+            check.checked = false;
+            input.classList.add("d-none");
+            btn.classList.add("d-none");
+            input.value = "";
+            status.textContent = "";
+            status.className = "proxy-status ok";
+        }
+
         if (data.using_fallback) {
             status.textContent = "⚠️ 使用本地存储（Redis 不可用）";
             status.className = "proxy-status warn";
-        } else {
-            status.textContent = data.proxy_url ? "✓ 代理已配置" : "";
-            status.className = "proxy-status ok";
         }
     } catch (e) {
         byId("proxyBar").style.display = "flex";
     }
 }
 
+function toggleProxyInput() {
+    const check = byId("proxyEnableCheck");
+    const input = byId("proxyInput");
+    const btn = byId("saveProxyBtn");
+
+    if (check.checked) {
+        input.classList.remove("d-none");
+        btn.classList.remove("d-none");
+        input.focus();
+    } else {
+        input.classList.add("d-none");
+        btn.classList.add("d-none");
+        // 取消勾选时清除代理
+        byId("proxyInput").value = "";
+        requestJson("/api/proxy", {
+            method: "POST",
+            body: JSON.stringify({ proxy_url: "" }),
+        }).catch(() => {});
+    }
+}
+
 async function saveProxy() {
     const proxyUrl = byId("proxyInput").value.trim();
+    if (!proxyUrl) {
+        showMessage("error", "请输入代理地址");
+        return;
+    }
     clearMessages();
     try {
         const result = await requestJson("/api/proxy", {
@@ -449,6 +493,18 @@ async function saveProxy() {
         showMessage("success", result.message + "，请刷新页面或重启应用。");
     } catch (error) {
         showMessage("error", error.message);
+    }
+}
+
+async function refreshCompanies() {
+    clearMessages();
+    try {
+        const data = await requestJson("/api/companies");
+        state.companies = data.items || [];
+        renderCompanies();
+        showMessage("success", "列表已刷新，共 " + state.companies.length + " 条记录");
+    } catch (error) {
+        showMessage("error", "刷新失败: " + error.message);
     }
 }
 

@@ -44,10 +44,12 @@
         </header>
 
         <div class="proxy-bar" id="proxyBar">
-            <span class="proxy-label">代理设置</span>
-            <input id="proxyInput" class="form-control form-control-sm" placeholder="http://127.0.0.1:7890" style="width:260px;">
-            <button class="btn btn-sm btn-outline-primary" id="saveProxyBtn">保存</button>
+            <span class="proxy-label">代理</span>
+            <input type="checkbox" id="proxyEnableCheck" style="margin:0 4px;">
+            <input id="proxyInput" class="form-control form-control-sm d-none" placeholder="http://127.0.0.1:7890" style="width:260px;">
+            <button class="btn btn-sm btn-outline-primary d-none" id="saveProxyBtn">设置</button>
             <span class="proxy-status" id="proxyStatus"></span>
+            <button class="btn btn-sm btn-outline-success ms-auto" id="refreshCompaniesBtn">刷新列表</button>
         </div>
 
         <div class="alert alert-danger d-none" id="errorBox"></div>
