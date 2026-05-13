@@ -164,16 +164,8 @@ function renderSummary(summary) {
 }
 
 function renderStatusFilter(values) {
-    const select = byId("statusFilter");
-    const currentValue = select.value;
-    select.innerHTML = '<option value="">全部状态</option>';
-    values.forEach((value) => {
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = value;
-        select.appendChild(option);
-    });
-    select.value = values.includes(currentValue) ? currentValue : "";
+    // The old select-based filter is replaced by a dropdown
+    // No-op for backward compatibility
 }
 
 function updateStatusFilterUI() {
