@@ -150,6 +150,33 @@ body {
     grid-template-columns: 380px minmax(0, 1fr);
     gap: 16px;
     align-items: start;
+    position: relative;
+}
+
+.workspace > .resize-handle {
+    position: absolute;
+    left: calc(380px + 8px);
+    top: 0;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.workspace > .resize-handle::before {
+    content: "";
+    width: 4px;
+    height: 60px;
+    border-radius: 2px;
+    background: var(--line);
+    transition: background 0.2s;
+}
+
+.workspace > .resize-handle:hover::before {
+    background: var(--blue);
 }
 
 .side-panel,
@@ -275,6 +302,40 @@ select[multiple] {
     font-weight: 700;
     white-space: nowrap;
     background: var(--surface-muted);
+    user-select: none;
+    position: relative;
+}
+
+.table thead th[data-col] {
+    cursor: move;
+}
+
+.table thead th::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 25%;
+    height: 50%;
+    width: 4px;
+    background: transparent;
+    cursor: col-resize;
+    border-radius: 2px;
+}
+
+.table thead th:hover::after {
+    background: var(--blue);
+    opacity: 0.6;
+}
+
+.table.resizable th,
+.table.resizable td {
+    min-width: 80px;
+    max-width: 400px;
+}
+
+.table th[data-col] {
+    resize: horizontal;
+    overflow: auto;
 }
 
 .table tbody td {

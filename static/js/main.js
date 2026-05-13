@@ -399,10 +399,190 @@ async function importCompanies() {
     }
 }
 
+let lastImportMode = "merge"; // "merge" or "overwrite"
+
+async function handleImportFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    clearMessages();
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const text = e.target.result;
+        const endpoint = lastImportMode === "overwrite" ? "/api/companies/import-overwrite" : "/api/companies/import";
+        try {
+            const result = await requestJson(endpoint, {
+                method: "POST",
+                body: JSON.stringify({ text }),
+            });
+            showMessage("success", result.message);
+            renderSummary(result.summary || {});
+            state.companies = result.items || [];
+            renderCompanies();
+        } catch (error) {
+            showMessage("error", error.message);
+        } finally {
+            event.target.value = "";
+        }
+    };
+    reader.readAsText(file);
+}
+
+function setImportMode(mode) {
+    lastImportMode = mode;
+}
+
+function setupWorkspaceResize() {
+    const handle = byId("workspaceResizeHandle");
+    const sidePanel = document.querySelector(".side-panel");
+    const workspace = document.querySelector(".workspace");
+    if (!handle || !sidePanel || !workspace) return;
+
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    handle.addEventListener("mousedown", (e) => {
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = sidePanel.offsetWidth;
+        handle.style.pointerEvents = "none";
+        e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+        if (!isResizing) return;
+        const diff = e.clientX - startX;
+        const newWidth = Math.max(260, Math.min(startWidth + diff, 600));
+        sidePanel.style.width = newWidth + "px";
+        sidePanel.style.flexShrink = "0";
+        // Update grid column
+        workspace.style.gridTemplateColumns = newWidth + "px minmax(0, 1fr)";
+    });
+
+    document.addEventListener("mouseup", () => {
+        if (isResizing) {
+            isResizing = false;
+            handle.style.pointerEvents = "";
+        }
+    });
+}
+
+function setupTableDragResize() {
+    const table = byId("companyTable");
+    if (!table) return;
+
+    const thead = table.querySelector("thead");
+    const tbody = table.querySelector("tbody");
+    const headerCells = thead.querySelectorAll("th[data-col]");
+    const originalOrder = Array.from(headerCells).map(th => th.dataset.col);
+
+    // Column drag-and-drop
+    headerCells.forEach(th => {
+        th.addEventListener("dragstart", (e) => {
+            e.dataTransfer.setData("text/plain", th.dataset.col);
+            th.style.opacity = "0.5";
+        });
+        th.addEventListener("dragend", () => {
+            th.style.opacity = "1";
+        });
+        th.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            th.style.borderTop = "2px solid var(--blue)";
+        });
+        th.addEventListener("dragleave", () => {
+            th.style.borderTop = "";
+        });
+        th.addEventListener("drop", (e) => {
+            e.preventDefault();
+            th.style.borderTop = "";
+            const draggedCol = e.dataTransfer.getData("text/plain");
+            const targetCol = th.dataset.col;
+            if (draggedCol === targetCol) return;
+
+            // Reorder header cells
+            const allTh = thead.querySelectorAll("th[data-col]");
+            const draggedIdx = originalOrder.indexOf(draggedCol);
+            const targetIdx = originalOrder.indexOf(targetCol);
+
+            // Get all rows
+            const rows = [thead.querySelector("tr"), ...tbody.querySelectorAll("tr")];
+            rows.forEach(row => {
+                const cells = row.querySelectorAll("th[data-col], td[data-col]");
+                const draggedCell = cells[draggedIdx];
+                const targetCell = cells[targetIdx];
+                if (draggedCell && targetCell) {
+                    if (draggedIdx < targetIdx) {
+                        targetCell.parentNode.insertBefore(draggedCell, targetCell.nextSibling);
+                    } else {
+                        targetCell.parentNode.insertBefore(draggedCell, targetCell);
+                    }
+                }
+            });
+
+            // Update original order
+            const newHeaders = thead.querySelectorAll("th[data-col]");
+            originalOrder.length = 0;
+            newHeaders.forEach(h => originalOrder.push(h.dataset.col));
+        });
+    });
+
+    // Column resize
+    const resizeHandle = document.createElement("div");
+    resizeHandle.style.cssText = `
+        position: fixed; top: 0; left: 0; width: 0; height: 0;
+        cursor: col-resize; display: none; z-index: 9999;
+    `;
+    document.body.appendChild(resizeHandle);
+
+    let isResizing = false;
+    let currentTh = null;
+    let startX = 0;
+    let startWidth = 0;
+
+    headerCells.forEach(th => {
+        th.addEventListener("mousedown", (e) => {
+            const rect = th.getBoundingClientRect();
+            if (e.clientX > rect.right - 8) {
+                isResizing = true;
+                currentTh = th;
+                startX = e.clientX;
+                startWidth = rect.width;
+                resizeHandle.style.display = "block";
+                resizeHandle.style.top = rect.top + "px";
+                resizeHandle.style.left = e.clientX + "px";
+                resizeHandle.style.height = rect.height + "px";
+                e.preventDefault();
+            }
+        });
+    });
+
+    document.addEventListener("mousemove", (e) => {
+        if (isResizing && currentTh) {
+            const diff = e.clientX - startX;
+            const newWidth = Math.max(60, startWidth + diff);
+            currentTh.style.width = newWidth + "px";
+            currentTh.style.minWidth = newWidth + "px";
+            resizeHandle.style.left = (e.clientX) + "px";
+        }
+    });
+
+    document.addEventListener("mouseup", () => {
+        if (isResizing) {
+            isResizing = false;
+            resizeHandle.style.display = "none";
+            currentTh = null;
+        }
+    });
+}
+
 async function boot() {
     byId("companyForm").addEventListener("submit", submitCompany);
     byId("cancelEditButton").addEventListener("click", resetForm);
     byId("importButton").addEventListener("click", importCompanies);
+    byId("importDataBtn").addEventListener("click", () => { setImportMode("merge"); byId("importFileInput").click(); });
+    byId("importOverwriteBtn").addEventListener("click", () => { setImportMode("overwrite"); byId("importFileInput").click(); });
+    byId("importFileInput").addEventListener("change", handleImportFile);
+
     byId("addStatusButton").addEventListener("click", addStatusOption);
     byId("addIndustryButton").addEventListener("click", addIndustryOption);
     byId("searchInput").addEventListener("input", renderCompanies);
@@ -413,6 +593,8 @@ async function boot() {
     byId("refreshCompaniesBtn").addEventListener("click", refreshCompanies);
 
     try {
+        setupWorkspaceResize();
+        setupTableDragResize();
         await loadProxySettings();
         await loadSummary();
         await loadCompanies();

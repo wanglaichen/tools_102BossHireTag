@@ -105,6 +105,18 @@ def import_companies():
     )
 
 
+@app.route("/api/companies/import-overwrite", methods=["POST"])
+def import_companies_overwrite():
+    payload = request.get_json(silent=True) or {}
+    result = company_service.import_rows(payload.get("text", ""), overwrite=True)
+    return jsonify(
+        {
+            "message": f"已覆盖导入 {result['imported_count']} 条",
+            **result,
+        }
+    )
+
+
 @app.route("/api/companies/export.csv", methods=["GET"])
 def export_companies_csv():
     body = company_service.export_csv()

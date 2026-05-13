@@ -177,12 +177,51 @@ class CompanyService:
         self.storage.write(data)
         return {"deleted": True, "id": company_id}
 
-    def import_rows(self, text: str) -> dict[str, Any]:
+    def import_rows(self, text: str, overwrite: bool = False) -> dict[str, Any]:
         if not text.strip():
             raise ValueError("导入内容不能为空")
 
         data = self._read_state()
         rows = self._parse_rows(text)
+
+        if overwrite:
+            # 导入并覆盖：清空现有数据，用新数据替换
+            existing_map = {c["company_name"]: c for c in data["companies"]}
+            now = self._now()
+            new_companies = []
+            imported_count = 0
+
+            for row in rows:
+                normalized = self._normalize_import_row(row)
+                if not normalized:
+                    continue
+
+                existing = existing_map.get(normalized["company_name"])
+                if existing:
+                    existing.update(normalized)
+                    existing["updated_at"] = now
+                    new_companies.append(existing)
+                else:
+                    new_companies.append({
+                        "id": str(uuid.uuid4()),
+                        **normalized,
+                        "created_at": now,
+                        "updated_at": now,
+                    })
+                    imported_count += 1
+
+            data["companies"] = new_companies
+            data["meta"]["last_changed_at"] = self._now()
+            self.storage.write(data)
+            return {
+                "imported_count": imported_count,
+                "updated_count": len(new_companies) - imported_count,
+                "skipped_count": 0,
+                "items": self.list_companies(),
+                "summary": self.get_summary(),
+            }
+
+        # 普通导入：合并（存在则更新，不存在则新增）
         imported_count = 0
         updated_count = 0
         skipped_count = 0

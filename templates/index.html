@@ -56,6 +56,7 @@
         <div class="alert alert-success d-none" id="successBox"></div>
 
         <main class="workspace">
+            <div class="resize-handle" id="workspaceResizeHandle"></div>
             <section class="side-panel">
                 <div class="panel-title">
                     <h2>新增记录</h2>
@@ -165,23 +166,26 @@
                         </select>
                     </div>
                     <div class="action-group">
+                        <button class="btn btn-outline-primary" id="importDataBtn">导入数据</button>
+                        <button class="btn btn-outline-danger" id="importOverwriteBtn">导入并覆盖</button>
                         <a class="btn btn-outline-secondary" href="/api/companies/export.csv">导出 CSV</a>
                         <a class="btn btn-outline-secondary" href="/api/companies/export.json">导出 JSON</a>
                     </div>
+                    <input type="file" id="importFileInput" accept=".json,.csv" class="d-none">
                 </div>
                 <div class="table-wrap">
-                    <table class="table align-middle mb-0">
+                    <table class="table align-middle mb-0 resizable" id="companyTable">
                         <thead>
                             <tr>
-                                <th>企业名称</th>
-                                <th>效果状态</th>
-                                <th>行业</th>
-                                <th>是否是猎头</th>
-                                <th>是否是外包</th>
-                                <th>是否已面试</th>
-                                <th>备注</th>
-                                <th>更新时间</th>
-                                <th>操作</th>
+                                <th draggable="true" data-col="company_name">企业名称</th>
+                                <th draggable="true" data-col="effect_status">效果状态</th>
+                                <th draggable="true" data-col="industry">行业</th>
+                                <th draggable="true" data-col="is_hunter">是否是猎头</th>
+                                <th draggable="true" data-col="is_outsourced">是否是外包</th>
+                                <th draggable="true" data-col="is_interviewed">是否已面试</th>
+                                <th draggable="true" data-col="note">备注</th>
+                                <th draggable="true" data-col="updated_at">更新时间</th>
+                                <th draggable="true" data-col="actions">操作</th>
                             </tr>
                         </thead>
                         <tbody id="companyTableBody">
