@@ -77,7 +77,8 @@ def update_settings():
 
 @app.route("/api/companies", methods=["GET"])
 def list_companies():
-    return jsonify({"items": company_service.list_companies()})
+    time_filter = request.args.get("time_filter", "all")
+    return jsonify({"items": company_service.list_companies(time_filter=time_filter)})
 
 
 @app.route("/api/companies", methods=["POST"])
@@ -160,6 +161,12 @@ def delete_company(company_id: str):
             "summary": company_service.get_summary(),
         }
     )
+
+
+@app.route("/api/companies/fix-history", methods=["POST"])
+def fix_company_history():
+    result = company_service.fix_history_timestamps()
+    return jsonify(result)
 
 
 def _proxy_store():

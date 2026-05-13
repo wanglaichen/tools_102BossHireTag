@@ -47,9 +47,51 @@ class CompanyService:
     def from_app_config(cls, config: dict[str, Any]) -> "CompanyService":
         return cls(create_storage(config))
 
-    def list_companies(self) -> list[dict[str, Any]]:
-        items = self._read_state()["companies"]
-        return sorted(items, key=lambda item: item.get("updated_at") or "", reverse=True)
+    def list_companies(self, time_filter: str = "all") -> list[dict[str, Any]]:
+        all_items = self._read_state()["companies"]
+
+        if time_filter == "all":
+            return sorted(all_items, key=lambda item: item.get("updated_at") or "", reverse=True)
+
+        # Use the storage's time index if available
+        if hasattr(self.storage, "primary") and hasattr(self.storage.primary, "get_companies_by_time_filter"):
+            try:
+                ids = self.storage.primary.get_companies_by_time_filter(time_filter)
+                id_set = set(ids)
+                filtered = [c for c in all_items if str(c.get("id", "")) in id_set]
+                return sorted(filtered, key=lambda item: item.get("updated_at") or "", reverse=True)
+            except Exception:
+                pass
+
+        # Fallback: filter manually by created_at timestamp
+        import time
+        now = int(time.time())
+        today_start = now - (now % 86400)
+
+        filtered = []
+        for item in all_items:
+            created_at = item.get("created_at", "")
+            if not created_at:
+                continue
+            try:
+                ts = int(created_at) if created_at.isdigit() else 0
+                if time_filter == "today" and ts >= today_start:
+                    filtered.append(item)
+                elif time_filter == "yesterday" and today_start - 86400 <= ts < today_start:
+                    filtered.append(item)
+                elif time_filter == "before_yesterday" and ts < today_start - 86400:
+                    filtered.append(item)
+            except (ValueError, TypeError):
+                pass
+
+        return sorted(filtered, key=lambda item: item.get("updated_at") or "", reverse=True)
+
+    def fix_history_timestamps(self) -> dict[str, Any]:
+        """Rebuild the timestamps index from existing company data."""
+        if hasattr(self.storage, "primary") and hasattr(self.storage.primary, "rebuild_timestamps_index"):
+            count = self.storage.primary.rebuild_timestamps_index()
+            return {"message": f"已为 {count} 条记录建立时间索引", "count": count}
+        return {"message": "当前存储不支持此功能", "count": 0}
 
     def get_settings(self) -> dict[str, Any]:
         if self.settings_store is not None:
@@ -415,4 +457,4 @@ class CompanyService:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return str(int(datetime.now(timezone.utc).timestamp()))

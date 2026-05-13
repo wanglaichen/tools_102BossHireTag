@@ -80,8 +80,75 @@ class RedisStorage:
     def _next_id_key(self) -> str:
         return f"{self.key_prefix}:next_id"
 
+    @property
+    def _timestamps_key(self) -> str:
+        return f"{self.key_prefix}:timestamps"
+
     def _next_id(self) -> int:
         return self.client.incr(self._next_id_key)
+
+    def _update_timestamps_index(self, companies: list[dict], pipeline: Any = None) -> None:
+        """Update the sorted set index with company creation timestamps."""
+        timestamp_members = []  # [(score, member), ...]
+        for company in companies:
+            company_id = str(company.get("id", ""))
+            created_at = company.get("created_at")
+            if company_id and created_at:
+                try:
+                    # Try parsing as Unix timestamp integer first
+                    ts = int(created_at)
+                    timestamp_members.append((float(ts), company_id))
+                except (ValueError, TypeError):
+                    # Fallback: try parsing ISO string datetime
+                    try:
+                        from datetime import datetime, timezone
+                        dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                        ts = int(dt.timestamp())
+                        timestamp_members.append((float(ts), company_id))
+                    except Exception:
+                        pass
+
+        if pipeline is None:
+            p = self.client.pipeline()
+        else:
+            p = pipeline
+
+        p.delete(self._timestamps_key)
+        if timestamp_members:
+            for score, member in timestamp_members:
+                p.zadd(self._timestamps_key, {member: score})
+
+        if pipeline is None:
+            p.execute()
+
+    def get_companies_by_time_filter(self, time_filter: str) -> list[str]:
+        """Get company IDs by time filter. time_filter: all/today/yesterday/before_yesterday"""
+        import time
+        now = int(time.time())
+        today_start = now - (now % 86400)
+
+        if time_filter == "all":
+            return [k.decode() if isinstance(k, bytes) else k for k in self.client.zrange(self._timestamps_key, 0, -1)]
+        if time_filter == "today":
+            return [k.decode() if isinstance(k, bytes) else k for k in self.client.zrangebyscore(self._timestamps_key, today_start, "+inf")]
+        if time_filter == "yesterday":
+            yesterday_start = today_start - 86400
+            yesterday_end = today_start - 1
+            return [k.decode() if isinstance(k, bytes) else k for k in self.client.zrangebyscore(self._timestamps_key, yesterday_start, yesterday_end)]
+        if time_filter == "before_yesterday":
+            before_yesterday_end = today_start - 1
+            return [k.decode() if isinstance(k, bytes) else k for k in self.client.zrangebyscore(self._timestamps_key, 0, before_yesterday_end)]
+        return []
+
+    def rebuild_timestamps_index(self) -> int:
+        """Rebuild the timestamps index from existing company hash data. Returns count."""
+        # Use the same data reading logic as read() to get all companies
+        legacy_state = self._read_legacy_state()
+        companies = self._read_company_hash()
+        if not companies:
+            companies = legacy_state.get("companies", [])
+        self._update_timestamps_index(companies)
+        return len(companies)
 
     def read(self) -> dict[str, Any]:
         legacy_state = self._read_legacy_state()
@@ -125,6 +192,9 @@ class RedisStorage:
         pipeline.delete(self._meta_key)
         if meta:
             pipeline.hset(self._meta_key, mapping={key: str(value) for key, value in meta.items()})
+
+        # Update timestamps sorted set
+        self._update_timestamps_index(companies, pipeline)
 
         legacy_keys = [key for key in self.client.scan_iter(f"{self.key_prefix}:companies:*")]
         legacy_state_key = f"{self.key_prefix}/companies"

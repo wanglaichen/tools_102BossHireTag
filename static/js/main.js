@@ -6,6 +6,7 @@ const state = {
         status_options: ["拒绝", "加微信", "在考虑"],
         industry_options: ["棋牌", "游戏", "互联网"],
     },
+    timeFilter: "all",
 };
 
 function byId(id) {
@@ -329,7 +330,7 @@ async function loadSummary() {
 }
 
 async function loadCompanies() {
-    const data = await requestJson("/api/companies");
+    const data = await requestJson("/api/companies?time_filter=" + state.timeFilter);
     state.companies = data.items || [];
     renderCompanies();
 }
@@ -591,6 +592,15 @@ async function boot() {
     byId("saveProxyBtn").addEventListener("click", saveProxy);
     byId("proxyEnableCheck").addEventListener("change", toggleProxyInput);
     byId("refreshCompaniesBtn").addEventListener("click", refreshCompanies);
+    document.querySelectorAll(".time-filter-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".time-filter-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            state.timeFilter = btn.dataset.filter;
+            loadCompaniesByTimeFilter();
+        });
+    });
+    byId("fixHistoryBtn").addEventListener("click", fixHistoryData);
 
     try {
         setupWorkspaceResize();
@@ -681,12 +691,34 @@ async function saveProxy() {
 async function refreshCompanies() {
     clearMessages();
     try {
-        const data = await requestJson("/api/companies");
+        const data = await requestJson("/api/companies?time_filter=" + state.timeFilter);
         state.companies = data.items || [];
         renderCompanies();
         showMessage("success", "列表已刷新，共 " + state.companies.length + " 条记录");
     } catch (error) {
         showMessage("error", "刷新失败: " + error.message);
+    }
+}
+
+async function loadCompaniesByTimeFilter() {
+    clearMessages();
+    try {
+        const data = await requestJson("/api/companies?time_filter=" + state.timeFilter);
+        state.companies = data.items || [];
+        renderCompanies();
+    } catch (error) {
+        showMessage("error", "加载失败: " + error.message);
+    }
+}
+
+async function fixHistoryData() {
+    clearMessages();
+    try {
+        const result = await requestJson("/api/companies/fix-history", { method: "POST" });
+        showMessage("success", result.message || "修复完成");
+        await loadCompanies();
+    } catch (error) {
+        showMessage("error", "修复失败: " + error.message);
     }
 }
 

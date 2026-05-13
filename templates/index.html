@@ -49,6 +49,13 @@
             <input id="proxyInput" class="form-control form-control-sm d-none" placeholder="http://127.0.0.1:7890" style="width:260px;">
             <button class="btn btn-sm btn-outline-primary d-none" id="saveProxyBtn">设置</button>
             <span class="proxy-status" id="proxyStatus"></span>
+            <span class="vr-line"></span>
+            <span class="proxy-label">创建时间</span>
+            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="all">所有</button>
+            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="today">今天</button>
+            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="yesterday">昨天</button>
+            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="before_yesterday">昨天及以前</button>
+            <button class="btn btn-sm btn-outline-warning" id="fixHistoryBtn">修复历史数据</button>
             <button class="btn btn-sm btn-outline-success ms-auto" id="refreshCompaniesBtn">刷新列表</button>
         </div>
 

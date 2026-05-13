@@ -62,6 +62,19 @@ body {
     color: var(--green);
 }
 
+.vr-line {
+    width: 1px;
+    height: 24px;
+    background: var(--line);
+    margin: 0 8px;
+}
+
+.time-filter-btn.active {
+    background: var(--blue);
+    color: var(--bg);
+    border-color: var(--blue);
+}
+
 .topbar {
     display: grid;
     grid-template-columns: minmax(320px, 1fr) minmax(540px, 820px);
