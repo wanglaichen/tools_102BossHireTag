@@ -162,9 +162,13 @@
                 <div class="tools">
                     <div class="search-group">
                         <input id="searchInput" class="form-control" placeholder="搜索公司、状态、行业、备注">
-                        <select id="statusFilter" class="form-select" multiple size="2">
-                            <option value="">全部状态</option>
-                        </select>
+                        <div class="multi-filter-dropdown" id="statusDropdown">
+                            <button type="button" class="btn btn-outline-secondary form-select" id="statusFilterBtn">
+                                <span>全部状态</span>
+                                <span class="dropdown-arrow">▾</span>
+                            </button>
+                            <div class="multi-filter-menu" id="statusFilterMenu"></div>
+                        </div>
                         <select id="hunterFilter" class="form-select">
                             <option value="">全部类型</option>
                             <option value="yes">猎头</option>

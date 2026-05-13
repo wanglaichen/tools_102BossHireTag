@@ -7,6 +7,7 @@ const state = {
         industry_options: ["棋牌", "游戏", "互联网"],
     },
     timeFilter: "all",
+    selectedStatuses: [],
 };
 
 function byId(id) {
@@ -175,11 +176,68 @@ function renderStatusFilter(values) {
     select.value = values.includes(currentValue) ? currentValue : "";
 }
 
+function updateStatusFilterUI() {
+    const menu = byId("statusFilterMenu");
+    const btn = byId("statusFilterBtn");
+    const statuses = state.settings.status_options || [];
+
+    menu.innerHTML = "";
+
+    const allLabel = document.createElement("label");
+    allLabel.innerHTML = `<input type="checkbox" value="" ${state.selectedStatuses.length === 0 ? "checked" : ""}> 全部`;
+    allLabel.querySelector("input").addEventListener("change", () => {
+        state.selectedStatuses = [];
+        updateStatusFilterUI();
+        renderCompanies();
+    });
+    menu.appendChild(allLabel);
+
+    statuses.forEach(status => {
+        const label = document.createElement("label");
+        label.innerHTML = `<input type="checkbox" value="${escapeHtml(status)}" ${state.selectedStatuses.includes(status) ? "checked" : ""}> ${escapeHtml(status)}`;
+        label.querySelector("input").addEventListener("change", () => {
+            if (state.selectedStatuses.includes(status)) {
+                state.selectedStatuses = state.selectedStatuses.filter(s => s !== status);
+            } else {
+                state.selectedStatuses.push(status);
+            }
+            const allCheckbox = menu.querySelector('input[value=""]');
+            if (allCheckbox) allCheckbox.checked = state.selectedStatuses.length === 0;
+            updateStatusFilterUI();
+            renderCompanies();
+        });
+        menu.appendChild(label);
+    });
+
+    const span = btn.querySelector("span");
+    if (state.selectedStatuses.length === 0) {
+        span.textContent = "全部状态";
+    } else if (state.selectedStatuses.length === 1) {
+        span.textContent = state.selectedStatuses[0];
+    } else {
+        span.textContent = `已选${state.selectedStatuses.length}项`;
+    }
+}
+
+function toggleStatusFilterMenu() {
+    const menu = byId("statusFilterMenu");
+    menu.classList.toggle("show");
+    if (menu.classList.contains("show")) {
+        updateStatusFilterUI();
+    }
+}
+
+document.addEventListener("click", (e) => {
+    const dropdown = byId("statusDropdown");
+    if (!dropdown.contains(e.target)) {
+        byId("statusFilterMenu").classList.remove("show");
+    }
+});
+
 function getFilteredCompanies() {
     const keyword = byId("searchInput").value.trim().toLowerCase();
-    const statusSelect = byId("statusFilter");
-    const selectedStatuses = Array.from(statusSelect.selectedOptions).map(o => o.value).filter(Boolean);
-    const statusFilterAll = selectedStatuses.includes("") || selectedStatuses.length === 0;
+    const selectedStatuses = state.selectedStatuses;
+    const statusFilterAll = selectedStatuses.length === 0;
     const hunter = byId("hunterFilter").value;
     const outsourced = byId("outsourcedFilter").value;
 
@@ -592,7 +650,7 @@ async function boot() {
     byId("addStatusButton").addEventListener("click", addStatusOption);
     byId("addIndustryButton").addEventListener("click", addIndustryOption);
     byId("searchInput").addEventListener("input", renderCompanies);
-    byId("statusFilter").addEventListener("change", renderCompanies);
+    byId("statusFilterBtn").addEventListener("click", toggleStatusFilterMenu);
     byId("hunterFilter").addEventListener("change", renderCompanies);
     byId("saveProxyBtn").addEventListener("click", saveProxy);
     byId("proxyEnableCheck").addEventListener("change", toggleProxyInput);
