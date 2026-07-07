@@ -43,7 +43,7 @@ def handle_unexpected_error(error):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", app_version=AppConfig.APP_VERSION)
 
 
 @app.route("/api/summary", methods=["GET"])

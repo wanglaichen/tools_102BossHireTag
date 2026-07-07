@@ -29,6 +29,21 @@ body {
     width: min(1540px, calc(100% - 32px));
     margin: 0 auto;
     padding: 24px 0 36px;
+    position: relative;
+}
+
+.app-version {
+    position: absolute;
+    top: 8px;
+    right: 0;
+    padding: 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
 }
 
 .proxy-bar {
