@@ -63,7 +63,7 @@ class RedisStorage:
             self._client = redis.Redis.from_url(
                 self.url,
                 decode_responses=True,
-                socket_connect_timeout=2,
+                socket_connect_timeout=self._timeout,
                 socket_timeout=self._timeout,
             )
         return self._client
