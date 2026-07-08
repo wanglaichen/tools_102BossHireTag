@@ -41,6 +41,11 @@ def handle_unexpected_error(error):
     raise error
 
 
+@app.route("/api/version", methods=["GET"])
+def get_version():
+    return jsonify({"version": AppConfig.APP_VERSION})
+
+
 @app.route("/")
 def index():
     return render_template("index.html", app_version=AppConfig.APP_VERSION)

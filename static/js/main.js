@@ -631,6 +631,19 @@ function setupTableDragResize() {
     });
 }
 
+async function loadVersion() {
+    const el = byId("appVersion");
+    if (!el) return;
+    try {
+        const data = await requestJson("/api/version");
+        if (data.version) {
+            el.textContent = data.version;
+        }
+    } catch (e) {
+        // 保留模板中的默认版本号
+    }
+}
+
 async function boot() {
     byId("companyForm").addEventListener("submit", submitCompany);
     byId("cancelEditButton").addEventListener("click", resetForm);
@@ -660,6 +673,7 @@ async function boot() {
     try {
         setupWorkspaceResize();
         setupTableDragResize();
+        await loadVersion();
         await loadProxySettings();
         await loadSummary();
         await loadCompanies();
