@@ -1,4 +1,0 @@
-fix: 修复版本号不可见，删除过时根目录 index.html
-
-版本号移到标题旁蓝色徽章显示，新增 /api/version 接口；
-删除根目录旧 index.html，避免 Vercel 优先返回过时静态页。
