@@ -81,7 +81,7 @@ DATA_PATH = resolve_data_path()
 
 
 class AppConfig:
-    APP_VERSION = os.getenv("APP_VERSION", "v1.0.37")
+    APP_VERSION = os.getenv("APP_VERSION", "v1.0.38")
     SECRET_KEY = os.getenv("SECRET_KEY", "tools102-boss-hire-tag-dev")
     APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
     APP_PORT = int(os.getenv("APP_PORT", os.getenv("PORT", "9212")))
