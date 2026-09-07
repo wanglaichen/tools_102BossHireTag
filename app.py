@@ -46,6 +46,24 @@ def get_version():
     return jsonify({"version": AppConfig.APP_VERSION})
 
 
+@app.route("/api/shutdown", methods=["POST"])
+def shutdown_server():
+    """Gracefully stop the running Flask process.
+
+    Prefers Werkzeug's dev-server shutdown hook; falls back to os._exit
+    so it also works when not running under the Werkzeug reloader.
+    """
+    shutdown_func = request.environ.get("werkzeug.server.shutdown")
+    if shutdown_func is not None:
+        try:
+            shutdown_func()
+        except RuntimeError:
+            pass
+        return jsonify({"message": "服务已关闭"})
+
+    os._exit(0)
+
+
 @app.route("/")
 def index():
     return render_template("index.html", app_version=AppConfig.APP_VERSION)

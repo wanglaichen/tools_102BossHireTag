@@ -16,4 +16,4 @@ if not exist "%BASH_EXE%" (
     exit /b 1
 )
 
-"%BASH_EXE%" restart.sh start
+"%BASH_EXE%" stop.sh
