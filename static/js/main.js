@@ -487,6 +487,68 @@ function setImportMode(mode) {
     lastImportMode = mode;
 }
 
+async function createBackup() {
+    clearMessages();
+    const btn = byId("backupBtn");
+    if (btn) btn.disabled = true;
+    try {
+        const result = await requestJson("/api/backup", { method: "POST" });
+        const payload = result.payload || {};
+        const filename = result.filename || `backup_${Date.now()}.json`;
+        const blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], {
+            type: "application/json;charset=utf-8",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showMessage("success", (result.message || "备份完成") + "，文件已下载，可带到其他版本还原");
+    } catch (error) {
+        showMessage("error", error.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function restoreBackup(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const confirmed = window.confirm("还原会用该备份覆盖当前全部公司和设置，且不可撤销。确定继续？");
+    if (!confirmed) {
+        event.target.value = "";
+        return;
+    }
+    clearMessages();
+    const btn = byId("restoreBackupBtn");
+    if (btn) btn.disabled = true;
+    try {
+        const text = await file.text();
+        let payload;
+        try {
+            payload = JSON.parse(text);
+        } catch (error) {
+            throw new Error("备份文件不是有效的 JSON");
+        }
+        const result = await requestJson("/api/backup/restore", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        });
+        showMessage("success", result.message || "还原完成");
+        renderSummary(result.summary || {});
+        state.companies = result.items || [];
+        renderCompanies();
+    } catch (error) {
+        showMessage("error", error.message);
+    } finally {
+        event.target.value = "";
+        if (btn) btn.disabled = false;
+    }
+}
+
 function setupWorkspaceResize() {
     const handle = byId("workspaceResizeHandle");
     const sidePanel = document.querySelector(".side-panel");
@@ -651,6 +713,9 @@ async function boot() {
     byId("importDataBtn").addEventListener("click", () => { setImportMode("merge"); byId("importFileInput").click(); });
     byId("importOverwriteBtn").addEventListener("click", () => { setImportMode("overwrite"); byId("importFileInput").click(); });
     byId("importFileInput").addEventListener("change", handleImportFile);
+    byId("backupBtn").addEventListener("click", createBackup);
+    byId("restoreBackupBtn").addEventListener("click", () => byId("restoreFileInput").click());
+    byId("restoreFileInput").addEventListener("change", restoreBackup);
 
     byId("addStatusButton").addEventListener("click", addStatusOption);
     byId("addIndustryButton").addEventListener("click", addIndustryOption);

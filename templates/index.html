@@ -185,10 +185,13 @@
                     <div class="action-group">
                         <button class="btn btn-outline-primary" id="importDataBtn">导入数据</button>
                         <button class="btn btn-outline-danger" id="importOverwriteBtn">导入并覆盖</button>
+                        <button class="btn btn-outline-success" id="backupBtn" type="button">下载备份</button>
+                        <button class="btn btn-outline-warning" id="restoreBackupBtn" type="button">还原备份</button>
                         <a class="btn btn-outline-secondary" href="/api/companies/export.csv">导出 CSV</a>
                         <a class="btn btn-outline-secondary" href="/api/companies/export.json">导出 JSON</a>
                     </div>
                     <input type="file" id="importFileInput" accept=".json,.csv" class="d-none">
+                    <input type="file" id="restoreFileInput" accept=".json,application/json" class="d-none">
                 </div>
                 <div class="table-wrap">
                     <table class="table align-middle mb-0 resizable" id="companyTable">

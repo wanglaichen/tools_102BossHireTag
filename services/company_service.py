@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -18,6 +19,9 @@ DEFAULT_SETTINGS = {
     "status_options": ["拒绝", "加微信", "在考虑"],
     "industry_options": ["棋牌", "游戏", "互联网"],
 }
+
+BACKUP_TYPE = "tools102-boss-hire-tag-backup"
+BACKUP_SCHEMA_VERSION = 1
 
 HEADER_ALIASES = {
     "企业名称": "company_name",
@@ -322,6 +326,207 @@ class CompanyService:
                 ]
             )
         return output.getvalue()
+
+    def create_backup(self, backup_dir: str, keep_count: int = 20, app_version: str = "") -> dict[str, Any]:
+        """Create a portable full JSON backup on disk and return metadata + payload."""
+        from pathlib import Path
+
+        state = self._read_state()
+        companies = list(state.get("companies") or [])
+        settings = self.get_settings()
+        created_at = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        version_tag = "".join(ch for ch in (app_version or "unknown") if ch.isalnum() or ch in "._-") or "unknown"
+        filename = f"backup_{version_tag}_{created_at}.json"
+        payload = {
+            "type": BACKUP_TYPE,
+            "schema_version": BACKUP_SCHEMA_VERSION,
+            "version": BACKUP_SCHEMA_VERSION,
+            "app_version": app_version or "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "company_count": len(companies),
+            "companies": companies,
+            "settings": settings,
+            "meta": state.get("meta") or {},
+        }
+
+        root = Path(backup_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        file_path = root / filename
+        file_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        # Keep only the newest keep_count backups
+        backups = sorted(root.glob("backup_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in backups[max(keep_count, 1) :]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+        return {
+            "message": f"备份完成，共 {len(companies)} 条公司记录",
+            "filename": filename,
+            "path": str(file_path),
+            "company_count": len(companies),
+            "created_at": payload["created_at"],
+            "payload": payload,
+        }
+
+    def list_backups(self, backup_dir: str) -> list[dict[str, Any]]:
+        from pathlib import Path
+
+        root = Path(backup_dir)
+        if not root.exists():
+            return []
+        items = []
+        for path in sorted(root.glob("backup_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            items.append(
+                {
+                    "filename": path.name,
+                    "size": path.stat().st_size,
+                    "mtime": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+        return items
+
+    def restore_backup(self, payload: Any) -> dict[str, Any]:
+        """Replace companies and settings from a portable backup.
+
+        Accepts the current backup file, older backups, and the previous
+        JSON export shape so a file can move between release versions.
+        """
+        companies_raw, settings_raw, source_schema = self._extract_backup_parts(payload)
+        records: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+        seen_ids: set[str] = set()
+        skipped = 0
+
+        for item in companies_raw:
+            record = self._normalize_backup_company(item)
+            if not record:
+                skipped += 1
+                continue
+            name_key = record["company_name"].casefold()
+            if name_key in seen_names:
+                skipped += 1
+                continue
+            if record["id"] in seen_ids:
+                record["id"] = str(uuid.uuid4())
+            seen_names.add(name_key)
+            seen_ids.add(record["id"])
+            records.append(record)
+
+        data = self._read_state()
+        now = self._now()
+        data["companies"] = records
+        meta = data.setdefault("meta", {})
+        if not isinstance(meta, dict):
+            meta = {}
+            data["meta"] = meta
+        meta["last_changed_at"] = now
+        meta["restored_at"] = now
+        meta["restored_from_schema"] = source_schema
+        self.storage.write(data)
+
+        if settings_raw is not None:
+            self.update_settings(settings_raw)
+
+        if hasattr(self.storage, "primary") and hasattr(self.storage.primary, "rebuild_timestamps_index"):
+            self.storage.primary.rebuild_timestamps_index()
+        elif hasattr(self.storage, "rebuild_timestamps_index"):
+            self.storage.rebuild_timestamps_index()
+
+        compatible = source_schema <= BACKUP_SCHEMA_VERSION
+        message = f"已还原 {len(records)} 条公司记录"
+        if not compatible:
+            message += "（来自更高版本备份，已按当前版本兼容字段写入）"
+        return {
+            "message": message,
+            "restored_count": len(records),
+            "skipped_count": skipped,
+            "schema_version": source_schema,
+            "items": self.list_companies(),
+            "summary": self.get_summary(),
+        }
+
+    def _extract_backup_parts(self, payload: Any) -> tuple[list[Any], dict[str, Any] | None, int]:
+        if isinstance(payload, dict) and isinstance(payload.get("backup"), dict):
+            payload = payload["backup"]
+
+        if isinstance(payload, list):
+            return payload, None, 0
+
+        if not isinstance(payload, dict):
+            raise ValueError("备份文件格式不正确")
+
+        backup_type = str(payload.get("type") or "")
+        if backup_type and backup_type != BACKUP_TYPE:
+            raise ValueError("不是本系统的备份文件")
+
+        companies = payload.get("companies")
+        if companies is None and isinstance(payload.get("items"), list):
+            companies = payload.get("items")
+        if not isinstance(companies, list):
+            raise ValueError("备份文件里没有公司数据")
+
+        raw_version = payload.get("schema_version", payload.get("version", 0))
+        try:
+            schema_version = int(raw_version or 0)
+        except (TypeError, ValueError):
+            schema_version = 0
+
+        settings = payload.get("settings")
+        if settings is not None and not isinstance(settings, dict):
+            settings = None
+        return companies, settings, schema_version
+
+    def _normalize_backup_company(self, item: Any) -> dict[str, Any] | None:
+        if not isinstance(item, dict):
+            return None
+        company_name = self._clean_text(item.get("company_name"), FIELD_LIMITS["company_name"])
+        if not company_name:
+            return None
+
+        now = self._now()
+        record_id = str(item.get("id") or "").strip() or str(uuid.uuid4())
+        created_at = str(item.get("created_at") or "").strip() or now
+        updated_at = str(item.get("updated_at") or "").strip() or created_at
+
+        record: dict[str, Any] = {}
+        for key, value in item.items():
+            if key in {
+                "id",
+                "company_name",
+                "effect_status",
+                "industry",
+                "is_hunter",
+                "is_outsourced",
+                "is_interviewed",
+                "note",
+                "created_at",
+                "updated_at",
+            }:
+                continue
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                record[key] = value
+
+        record.update(
+            {
+                "id": record_id,
+                "company_name": company_name,
+                "effect_status": self._clean_text(item.get("effect_status"), FIELD_LIMITS["effect_status"]),
+                "industry": self._clean_text(item.get("industry"), FIELD_LIMITS["industry"]),
+                "is_hunter": self._normalize_flag(item.get("is_hunter")),
+                "is_outsourced": self._normalize_flag(item.get("is_outsourced")),
+                "is_interviewed": self._normalize_flag(item.get("is_interviewed")),
+                "note": self._clean_text(item.get("note"), FIELD_LIMITS["note"]),
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+        )
+        return record
 
     def _read_state(self) -> dict[str, Any]:
         data = self.storage.read()
