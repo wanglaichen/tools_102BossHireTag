@@ -180,7 +180,7 @@ class CompanyService:
         record = self._build_record(payload, company_name=company_name, now=now)
         data["companies"].append(record)
         data["meta"]["last_changed_at"] = now
-        self.storage.write(data)
+        self._save_record(data, record)
         return record
 
     def update_company(self, company_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -209,7 +209,7 @@ class CompanyService:
         now = self._now()
         record["updated_at"] = now
         data["meta"]["last_changed_at"] = now
-        self.storage.write(data)
+        self._save_record(data, record)
         return record
 
     def delete_company(self, company_id: str) -> dict[str, Any]:
@@ -220,8 +220,17 @@ class CompanyService:
             raise ValueError("记录不存在")
 
         data["meta"]["last_changed_at"] = self._now()
-        self.storage.write(data)
+        if hasattr(self.storage, "delete_company_record"):
+            self.storage.delete_company_record(company_id, {"last_changed_at": data["meta"]["last_changed_at"]})
+        else:
+            self.storage.write(data)
         return {"deleted": True, "id": company_id}
+
+    def _save_record(self, data: dict[str, Any], record: dict[str, Any]) -> None:
+        if hasattr(self.storage, "upsert_company"):
+            self.storage.upsert_company(record, {"last_changed_at": data["meta"].get("last_changed_at") or self._now()})
+            return
+        self.storage.write(data)
 
     def import_rows(self, text: str, overwrite: bool = False) -> dict[str, Any]:
         if not text.strip():
@@ -231,7 +240,8 @@ class CompanyService:
         rows = self._parse_rows(text)
 
         if overwrite:
-            # 导入并覆盖：清空现有数据，用新数据替换
+            # 导入并覆盖：用新数据替换读取快照里的记录。快照之后新增的由 Lua 保留。
+            base_ids = [str(item.get("id")) for item in data["companies"] if item.get("id")]
             existing_map = {c["company_name"]: c for c in data["companies"]}
             now = self._now()
             new_companies = []
@@ -258,7 +268,7 @@ class CompanyService:
 
             data["companies"] = new_companies
             data["meta"]["last_changed_at"] = self._now()
-            self.storage.write(data)
+            self.storage.write(data, replace=True, base_ids=base_ids)
             return {
                 "imported_count": imported_count,
                 "updated_count": len(new_companies) - imported_count,
@@ -271,6 +281,8 @@ class CompanyService:
         imported_count = 0
         updated_count = 0
         skipped_count = 0
+        touched: list[dict[str, Any]] = []
+        now = self._now()
 
         for row in rows:
             normalized = self._normalize_import_row(row)
@@ -279,24 +291,28 @@ class CompanyService:
                 continue
 
             existing = self._find_by_name(data["companies"], normalized["company_name"])
-            now = self._now()
             if existing:
                 existing.update(normalized)
                 existing["updated_at"] = now
+                touched.append(existing)
                 updated_count += 1
             else:
-                data["companies"].append(
-                    {
-                        "id": str(uuid.uuid4()),
-                        **normalized,
-                        "created_at": now,
-                        "updated_at": now,
-                    }
-                )
+                record = {
+                    "id": str(uuid.uuid4()),
+                    **normalized,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                data["companies"].append(record)
+                touched.append(record)
                 imported_count += 1
 
-        data["meta"]["last_changed_at"] = self._now()
-        self.storage.write(data)
+        data["meta"]["last_changed_at"] = now
+        if hasattr(self.storage, "upsert_company"):
+            for item in touched:
+                self.storage.upsert_company(item, {"last_changed_at": now})
+        else:
+            self.storage.write(data)
         return {
             "imported_count": imported_count,
             "updated_count": updated_count,
@@ -419,6 +435,7 @@ class CompanyService:
             records.append(record)
 
         data = self._read_state()
+        base_ids = [str(item.get("id")) for item in data.get("companies") or [] if item.get("id")]
         now = self._now()
         data["companies"] = records
         meta = data.setdefault("meta", {})
@@ -428,7 +445,7 @@ class CompanyService:
         meta["last_changed_at"] = now
         meta["restored_at"] = now
         meta["restored_from_schema"] = source_schema
-        self.storage.write(data)
+        self.storage.write(data, replace=True, base_ids=base_ids)
 
         if settings_raw is not None:
             self.update_settings(settings_raw)

@@ -8,7 +8,7 @@ from werkzeug.exceptions import HTTPException
 from config import AppConfig
 from services.auth_service import AuthError, AuthService
 from services.company_service import CompanyService
-from services.storage import RedisProxyStore, RedisSettingsStore, create_storage
+from services.storage import RedisProxyStore, RedisSettingsStore, StorageUnavailable, create_storage
 
 
 app = Flask(__name__)
@@ -86,6 +86,11 @@ def _add_cors_headers(response):
 @app.errorhandler(AuthError)
 def handle_auth_error(error: AuthError):
     return jsonify({"message": error.message}), error.status_code
+
+
+@app.errorhandler(StorageUnavailable)
+def handle_storage_unavailable(error: StorageUnavailable):
+    return jsonify({"message": str(error)}), 503
 
 
 @app.errorhandler(ValueError)
