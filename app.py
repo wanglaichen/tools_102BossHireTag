@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 from config import AppConfig
@@ -14,13 +14,6 @@ from services.storage import RedisProxyStore, RedisSettingsStore, StorageUnavail
 app = Flask(__name__)
 app.config.from_object(AppConfig)
 
-
-settings_store = RedisSettingsStore(
-    AppConfig.REDIS_URL,
-    AppConfig.REDIS_SETTINGS_KEY,
-    AppConfig.REDIS_TIMEOUT_SECONDS,
-)
-company_service = CompanyService(create_storage(AppConfig.__dict__), settings_store=settings_store)
 auth_service = AuthService(
     redis_url=AppConfig.REDIS_URL,
     key_prefix=AppConfig.REDIS_KEY_PREFIX,
@@ -30,33 +23,72 @@ auth_service = AuthService(
     wechat_secret=AppConfig.WECHAT_SECRET,
     session_ttl_seconds=AppConfig.AUTH_SESSION_TTL_SECONDS,
     dev_token=AppConfig.MINIAPP_DEV_TOKEN,
+    admin_username=AppConfig.ADMIN_USERNAME,
+    admin_password=AppConfig.ADMIN_PASSWORD,
 )
+_account_services: dict[str, CompanyService] = {}
 
-# 需要登录的接口（当 MINIAPP_AUTH_REQUIRED=1）
-_AUTH_REQUIRED_PREFIXES = (
-    "/api/companies",
-    "/api/settings",
-    "/api/proxy",
-    "/api/backup",
-    "/api/shutdown",
-)
+try:
+    auth_service.ensure_default_admin()
+except Exception as exc:
+    app.logger.warning("默认管理员初始化失败: %s", exc)
+
+
+def _service_for_account(user: dict) -> CompanyService:
+    user_id = str(user["id"])
+    cached = _account_services.get(user_id)
+    if cached is not None:
+        return cached
+    legacy = bool(user.get("legacyStore"))
+    prefix = AppConfig.REDIS_KEY_PREFIX if legacy else f"{AppConfig.REDIS_KEY_PREFIX}:user:{user_id}"
+    settings_key = AppConfig.REDIS_SETTINGS_KEY if legacy else f"{prefix}:settings"
+    storage_file = (
+        AppConfig.STORAGE_FILE
+        if legacy
+        else str(Path(AppConfig.DATA_DIR) / "users" / user_id / "companies.json")
+    )
+    config = dict(AppConfig.__dict__)
+    config["REDIS_KEY_PREFIX"] = prefix
+    config["STORAGE_FILE"] = storage_file
+    service = CompanyService(
+        create_storage(config),
+        settings_store=RedisSettingsStore(AppConfig.REDIS_URL, settings_key, AppConfig.REDIS_TIMEOUT_SECONDS),
+    )
+    _account_services[user_id] = service
+    return service
+
+
+def _cs() -> CompanyService:
+    user = getattr(g, "account", None)
+    if not user:
+        raise AuthError("未登录")
+    return _service_for_account(user)
+
+
+def _export_filename(ext: str) -> str:
+    username = str((getattr(g, "account", None) or {}).get("username") or "account")
+    safe = "".join(ch for ch in username if ch.isalnum() or ch in "._-") or "account"
+    return f"{safe}-companies.{ext}"
+
+
+def _backup_dir() -> str:
+    user = getattr(g, "account", None) or {}
+    user_id = str(user.get("id") or "anonymous")
+    return str(Path(AppConfig.DATA_DIR) / "backups" / user_id)
+
+
 _AUTH_PUBLIC_EXACT = {
     "/api/auth/login",
+    "/api/auth/register",
     "/api/version",
-    "/api/summary",
 }
 
 
-def _require_auth_if_needed() -> None:
-    if not AppConfig.MINIAPP_AUTH_REQUIRED:
-        return
+def _require_account() -> None:
     path = request.path
-    if path in _AUTH_PUBLIC_EXACT or path == "/":
+    if not path.startswith("/api/") or path in _AUTH_PUBLIC_EXACT:
         return
-    if not path.startswith(_AUTH_REQUIRED_PREFIXES):
-        return
-    # 读接口也统一鉴权，避免未登录扫全库；开发期可关开关
-    auth_service.require_user(request.headers.get("Authorization"))
+    g.account = auth_service.require_account(request.headers.get("Authorization"))
 
 
 @app.before_request
@@ -64,7 +96,7 @@ def _auth_guard():
     if request.method == "OPTIONS":
         return ("", 204)
     try:
-        _require_auth_if_needed()
+        _require_account()
     except AuthError as error:
         return jsonify({"message": error.message}), error.status_code
 
@@ -118,17 +150,93 @@ def get_version():
     return jsonify({"version": AppConfig.APP_VERSION})
 
 
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = auth_service.register_account(
+            payload.get("username", ""),
+            payload.get("password", ""),
+            payload.get("displayName"),
+        )
+    except ValueError as error:
+        status = 409 if "已存在" in str(error) else 400
+        return jsonify({"message": str(error)}), status
+    return jsonify({"message": "注册成功", **result}), 201
+
+
 @app.route("/api/auth/login", methods=["POST"])
 def auth_login():
     payload = request.get_json(silent=True) or {}
+    if payload.get("username"):
+        result = auth_service.login_with_password(payload.get("username", ""), payload.get("password", ""))
+        return jsonify({"message": "登录成功", **result})
     result = auth_service.login_with_code(payload.get("code", ""))
-    return jsonify({"message": "登录成功", **result})
+    account = auth_service.ensure_wechat_user(result["user"]["openid"])
+    return jsonify({"message": "登录成功", **result, "user": auth_service.public_user(account)})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    token = auth_service._bearer_token(request.headers.get("Authorization"))
+    auth_service.delete_session(token)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
-    user = auth_service.require_user(request.headers.get("Authorization"))
-    return jsonify({"user": user})
+    return jsonify({"user": auth_service.public_user(g.account)})
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+def auth_change_password():
+    payload = request.get_json(silent=True) or {}
+    user = auth_service.change_password(g.account["id"], payload.get("oldPassword", ""), payload.get("newPassword", ""))
+    return jsonify({"user": user, "message": "密码已更新"})
+
+
+def _require_admin() -> dict:
+    if g.account.get("role") != "admin":
+        raise AuthError("仅管理员可操作", 403)
+    return g.account
+
+
+@app.route("/api/auth/users", methods=["GET"])
+def auth_list_users():
+    _require_admin()
+    return jsonify({"users": auth_service.list_users()})
+
+
+@app.route("/api/auth/users", methods=["POST"])
+def auth_create_user():
+    _require_admin()
+    payload = request.get_json(silent=True) or {}
+    try:
+        user = auth_service.create_user(
+            username=payload.get("username", ""),
+            password=payload.get("password", ""),
+            display_name=payload.get("displayName"),
+            role=payload.get("role") or "user",
+            source="admin",
+        )
+    except ValueError as error:
+        status = 409 if "已存在" in str(error) else 400
+        return jsonify({"message": str(error)}), status
+    return jsonify({"user": auth_service.public_user(user), "message": "账号已创建"}), 201
+
+
+@app.route("/api/auth/users/<user_id>", methods=["PUT"])
+def auth_update_user(user_id: str):
+    payload = request.get_json(silent=True) or {}
+    user = auth_service.update_user(g.account, user_id, payload)
+    return jsonify({"user": user, "message": "账号已更新"})
+
+
+@app.route("/api/auth/users/<user_id>", methods=["DELETE"])
+def auth_delete_user(user_id: str):
+    auth_service.delete_user(g.account, user_id)
+    _account_services.pop(user_id, None)
+    return jsonify({"ok": True, "message": "账号已删除"})
 
 
 @app.route("/api/shutdown", methods=["POST"])
@@ -138,9 +246,9 @@ def shutdown_server():
     Prefers Werkzeug's dev-server shutdown hook; falls back to os._exit
     so it also works when not running under the Werkzeug reloader.
     """
-    # 本地 Web 可关鉴权；开启鉴权后必须登录才能关闭
-    if AppConfig.MINIAPP_AUTH_REQUIRED:
-        auth_service.require_user(request.headers.get("Authorization"))
+    # 关闭进程只允许已登录管理员
+    if g.account.get("role") != "admin":
+        raise AuthError("仅管理员可关闭服务", 403)
 
     shutdown_func = request.environ.get("werkzeug.server.shutdown")
     if shutdown_func is not None:
@@ -160,7 +268,7 @@ def index():
 
 @app.route("/api/summary", methods=["GET"])
 def summary():
-    return jsonify(company_service.get_summary())
+    return jsonify(_cs().get_summary())
 
 
 def _proxy_store():
@@ -173,35 +281,35 @@ def _proxy_store():
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    return jsonify(company_service.get_settings())
+    return jsonify(_cs().get_settings())
 
 
 @app.route("/api/settings", methods=["PATCH"])
 def update_settings():
     payload = request.get_json(silent=True) or {}
-    next_settings = company_service.update_settings(payload)
+    next_settings = _cs().update_settings(payload)
     return jsonify({
         "message": "配置已保存",
         "settings": next_settings,
-        "summary": company_service.get_summary(),
+        "summary": _cs().get_summary(),
     })
 
 
 @app.route("/api/companies", methods=["GET"])
 def list_companies():
     time_filter = request.args.get("time_filter", "all")
-    return jsonify({"items": company_service.list_companies(time_filter=time_filter)})
+    return jsonify({"items": _cs().list_companies(time_filter=time_filter)})
 
 
 @app.route("/api/companies", methods=["POST"])
 def create_company():
     payload = request.get_json(silent=True) or {}
-    item = company_service.create_company(payload)
+    item = _cs().create_company(payload)
     return jsonify(
         {
             "message": "记录已新增",
             "item": item,
-            "summary": company_service.get_summary(),
+            "summary": _cs().get_summary(),
         }
     )
 
@@ -209,7 +317,7 @@ def create_company():
 @app.route("/api/companies/import", methods=["POST"])
 def import_companies():
     payload = request.get_json(silent=True) or {}
-    result = company_service.import_rows(payload.get("text", ""))
+    result = _cs().import_rows(payload.get("text", ""))
     return jsonify(
         {
             "message": f"导入 {result['imported_count']} 条，更新 {result['updated_count']} 条，跳过 {result['skipped_count']} 条",
@@ -221,7 +329,7 @@ def import_companies():
 @app.route("/api/companies/import-overwrite", methods=["POST"])
 def import_companies_overwrite():
     payload = request.get_json(silent=True) or {}
-    result = company_service.import_rows(payload.get("text", ""), overwrite=True)
+    result = _cs().import_rows(payload.get("text", ""), overwrite=True)
     return jsonify(
         {
             "message": f"已覆盖导入 {result['imported_count']} 条",
@@ -232,32 +340,36 @@ def import_companies_overwrite():
 
 @app.route("/api/companies/export.csv", methods=["GET"])
 def export_companies_csv():
-    body = company_service.export_csv()
+    body = _cs().export_csv()
     return Response(
         body.encode("utf-8-sig"),
         mimetype="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=resume-company-tags.csv"},
+        headers={"Content-Disposition": f"attachment; filename={_export_filename('csv')}"},
     )
 
 
 @app.route("/api/companies/export.json", methods=["GET"])
 def export_companies_json():
-    body = json.dumps({"items": company_service.list_companies()}, ensure_ascii=False, indent=2)
+    user = g.account
+    body = json.dumps(
+        {
+            "account": {"id": user["id"], "username": user["username"]},
+            "items": _cs().list_companies(),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
     return Response(
         body,
         mimetype="application/json; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=resume-company-tags.json"},
+        headers={"Content-Disposition": f"attachment; filename={_export_filename('json')}"},
     )
-
-
-def _backup_dir() -> str:
-    return str(Path(AppConfig.DATA_DIR) / "backups")
 
 
 @app.route("/api/backup", methods=["POST"])
 def create_backup():
     """Create a full backup on server and return metadata (payload included for client download)."""
-    result = company_service.create_backup(_backup_dir(), app_version=AppConfig.APP_VERSION)
+    result = _cs().create_backup(_backup_dir(), app_version=AppConfig.APP_VERSION)
     return jsonify(
         {
             "message": result["message"],
@@ -272,7 +384,7 @@ def create_backup():
 @app.route("/api/backup", methods=["GET"])
 def download_backup():
     """One-click: save backup on server and download the file."""
-    result = company_service.create_backup(_backup_dir(), app_version=AppConfig.APP_VERSION)
+    result = _cs().create_backup(_backup_dir(), app_version=AppConfig.APP_VERSION)
     body = json.dumps(result["payload"], ensure_ascii=False, indent=2) + "\n"
     return Response(
         body,
@@ -283,7 +395,7 @@ def download_backup():
 
 @app.route("/api/backups", methods=["GET"])
 def list_backups():
-    return jsonify({"items": company_service.list_backups(_backup_dir())})
+    return jsonify({"items": _cs().list_backups(_backup_dir())})
 
 
 @app.route("/api/backup/restore", methods=["POST"])
@@ -298,7 +410,7 @@ def restore_backup():
         except json.JSONDecodeError:
             return jsonify({"message": "备份文件不是有效的 JSON"}), 400
     try:
-        result = company_service.restore_backup(payload)
+        result = _cs().restore_backup(payload)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     return jsonify(
@@ -315,31 +427,31 @@ def restore_backup():
 @app.route("/api/companies/<company_id>", methods=["PATCH"])
 def update_company(company_id: str):
     payload = request.get_json(silent=True) or {}
-    item = company_service.update_company(company_id, payload)
+    item = _cs().update_company(company_id, payload)
     return jsonify(
         {
             "message": "记录已更新",
             "item": item,
-            "summary": company_service.get_summary(),
+            "summary": _cs().get_summary(),
         }
     )
 
 
 @app.route("/api/companies/<company_id>", methods=["DELETE"])
 def delete_company(company_id: str):
-    result = company_service.delete_company(company_id)
+    result = _cs().delete_company(company_id)
     return jsonify(
         {
             "message": "记录已删除",
             **result,
-            "summary": company_service.get_summary(),
+            "summary": _cs().get_summary(),
         }
     )
 
 
 @app.route("/api/companies/fix-history", methods=["POST"])
 def fix_company_history():
-    result = company_service.fix_history_timestamps()
+    result = _cs().fix_history_timestamps()
     return jsonify(result)
 
 
@@ -356,7 +468,7 @@ def get_proxy():
     proxy_store = _proxy_store()
     return jsonify({
         "proxy_url": proxy_store.get_proxy(),
-        "using_fallback": getattr(company_service.storage, "using_fallback", False),
+        "using_fallback": getattr(_cs().storage, "using_fallback", False),
     })
 
 

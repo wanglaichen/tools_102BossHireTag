@@ -620,3 +620,63 @@ select[multiple] {
         width: 100%;
     }
 }
+
+.login-gate,
+.account-admin {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(8, 12, 18, 0.72);
+}
+
+.login-card {
+    width: min(420px, 100%);
+    display: grid;
+    gap: 12px;
+    padding: 22px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--surface);
+}
+
+.login-card h2 {
+    margin: 0;
+}
+
+.login-tip,
+.login-error {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.login-error:empty {
+    display: none;
+}
+
+.login-card label {
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.account-card {
+    width: min(860px, 100%);
+}
+
+.account-head,
+.account-create {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.account-create {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1fr 120px auto;
+}

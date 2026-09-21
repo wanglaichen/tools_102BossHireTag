@@ -236,6 +236,7 @@ class CompanyService:
         if not text.strip():
             raise ValueError("导入内容不能为空")
 
+        text = self._coerce_import_text(text)
         data = self._read_state()
         rows = self._parse_rows(text)
 
@@ -565,6 +566,38 @@ class CompanyService:
             "created_at": now,
             "updated_at": now,
         }
+
+    def _coerce_import_text(self, text: str) -> str:
+        """把本账号导出的 JSON 转成表格文本。写入目标始终是当前账号，不看文件里的账号字段。"""
+        stripped = text.strip()
+        if not stripped.startswith("{") and not stripped.startswith("["):
+            return text
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return text
+        items = payload if isinstance(payload, list) else payload.get("items") or payload.get("companies") or []
+        if not isinstance(items, list) or not items:
+            return text
+        flag = {"yes": "是", "no": "否", "unknown": ""}
+        lines = ["企业名称\t效果状态\t行业\t是否是猎头\t是否是外包\t是否已面试\t备注"]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                "\t".join(
+                    [
+                        str(item.get("company_name") or ""),
+                        str(item.get("effect_status") or ""),
+                        str(item.get("industry") or ""),
+                        flag.get(str(item.get("is_hunter") or ""), str(item.get("is_hunter") or "")),
+                        flag.get(str(item.get("is_outsourced") or ""), str(item.get("is_outsourced") or "")),
+                        flag.get(str(item.get("is_interviewed") or ""), str(item.get("is_interviewed") or "")),
+                        str(item.get("note") or ""),
+                    ]
+                )
+            )
+        return "\n".join(lines)
 
     def _parse_rows(self, text: str) -> list[list[str]]:
         sample = text.strip()

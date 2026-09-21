@@ -57,6 +57,9 @@
             <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="before_yesterday">昨天及以前</button>
             <button class="btn btn-sm btn-outline-warning" id="fixHistoryBtn">修复历史数据</button>
             <button class="btn btn-sm btn-outline-success ms-auto" id="refreshCompaniesBtn">刷新列表</button>
+            <span class="proxy-label" id="currentUserLabel"></span>
+            <button class="btn btn-sm btn-outline-primary d-none" id="accountAdminBtn" type="button">账号管理</button>
+            <button class="btn btn-sm btn-outline-secondary" id="logoutBtn" type="button">退出</button>
         </div>
 
         <div class="alert alert-danger d-none" id="errorBox"></div>
@@ -187,8 +190,8 @@
                         <button class="btn btn-outline-danger" id="importOverwriteBtn">导入并覆盖</button>
                         <button class="btn btn-outline-success" id="backupBtn" type="button">下载备份</button>
                         <button class="btn btn-outline-warning" id="restoreBackupBtn" type="button">还原备份</button>
-                        <a class="btn btn-outline-secondary" href="/api/companies/export.csv">导出 CSV</a>
-                        <a class="btn btn-outline-secondary" href="/api/companies/export.json">导出 JSON</a>
+                        <button class="btn btn-outline-secondary" id="exportCsvBtn" type="button">导出 CSV</button>
+                        <button class="btn btn-outline-secondary" id="exportJsonBtn" type="button">导出 JSON</button>
                     </div>
                     <input type="file" id="importFileInput" accept=".json,.csv" class="d-none">
                     <input type="file" id="restoreFileInput" accept=".json,application/json" class="d-none">
@@ -215,6 +218,55 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <div id="loginGate" class="login-gate">
+        <form id="loginForm" class="login-card">
+            <h2>登录</h2>
+            <p class="login-tip">每个账号的公司记录互相独立。默认管理员来自服务器配置。</p>
+            <label>用户名<input id="loginUsername" class="form-control" autocomplete="username" required></label>
+            <label>密码<input id="loginPassword" class="form-control" type="password" autocomplete="current-password" required></label>
+            <button class="btn btn-primary w-100" type="submit">登录</button>
+            <button class="btn btn-outline-secondary w-100" id="showRegisterBtn" type="button">注册新账号</button>
+            <div id="loginError" class="login-error"></div>
+        </form>
+        <form id="registerForm" class="login-card d-none">
+            <h2>注册</h2>
+            <label>用户名<input id="registerUsername" class="form-control" autocomplete="username" required></label>
+            <label>显示名<input id="registerDisplayName" class="form-control" autocomplete="nickname"></label>
+            <label>密码<input id="registerPassword" class="form-control" type="password" autocomplete="new-password" required></label>
+            <button class="btn btn-primary w-100" type="submit">注册并登录</button>
+            <button class="btn btn-outline-secondary w-100" id="showLoginBtn" type="button">返回登录</button>
+            <div id="registerError" class="login-error"></div>
+        </form>
+    </div>
+
+    <div id="accountAdmin" class="account-admin d-none">
+        <div class="login-card account-card">
+            <div class="account-head">
+                <h2>账号管理</h2>
+                <button class="btn btn-sm btn-outline-secondary" id="closeAccountAdminBtn" type="button">关闭</button>
+            </div>
+            <form id="createAccountForm" class="account-create">
+                <input id="newAccountUsername" class="form-control" placeholder="用户名" required>
+                <input id="newAccountDisplayName" class="form-control" placeholder="显示名">
+                <input id="newAccountPassword" class="form-control" type="password" placeholder="密码" required>
+                <select id="newAccountRole" class="form-select">
+                    <option value="user">普通账号</option>
+                    <option value="admin">管理员</option>
+                </select>
+                <button class="btn btn-primary" type="submit">创建</button>
+            </form>
+            <div id="accountAdminError" class="login-error"></div>
+            <div class="table-wrap">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>操作</th></tr>
+                    </thead>
+                    <tbody id="accountTableBody"></tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>

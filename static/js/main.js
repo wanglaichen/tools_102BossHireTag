@@ -8,6 +8,7 @@ const state = {
     },
     timeFilter: "all",
     selectedStatuses: [],
+    account: null,
 };
 
 function byId(id) {
@@ -31,11 +32,23 @@ function clearMessages() {
 }
 
 async function requestJson(url, options = {}) {
+    const headers = {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+    };
+    const token = sessionStorage.getItem("boss_auth_token");
+    if (token) {
+        headers.Authorization = `Bearer ${token}`;
+    }
     const response = await fetch(url, {
-        headers: { "Content-Type": "application/json" },
         ...options,
+        headers,
     });
     const data = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+        sessionStorage.removeItem("boss_auth_token");
+        showLoginGate();
+    }
     if (!response.ok) {
         throw new Error(data.message || "请求失败");
     }
@@ -707,37 +720,56 @@ async function loadVersion() {
 }
 
 async function boot() {
-    byId("companyForm").addEventListener("submit", submitCompany);
-    byId("cancelEditButton").addEventListener("click", resetForm);
-    byId("importButton").addEventListener("click", importCompanies);
-    byId("importDataBtn").addEventListener("click", () => { setImportMode("merge"); byId("importFileInput").click(); });
-    byId("importOverwriteBtn").addEventListener("click", () => { setImportMode("overwrite"); byId("importFileInput").click(); });
-    byId("importFileInput").addEventListener("change", handleImportFile);
-    byId("backupBtn").addEventListener("click", createBackup);
-    byId("restoreBackupBtn").addEventListener("click", () => byId("restoreFileInput").click());
-    byId("restoreFileInput").addEventListener("change", restoreBackup);
+    bindAccountEvents();
+    const user = await restoreSession();
+    if (!user) {
+        showLoginGate();
+        return;
+    }
+    hideLoginGate();
+    applyAccount(user);
+    await openWorkspace();
+}
 
-    byId("addStatusButton").addEventListener("click", addStatusOption);
-    byId("addIndustryButton").addEventListener("click", addIndustryOption);
-    byId("searchInput").addEventListener("input", renderCompanies);
-    byId("statusFilterBtn").addEventListener("click", toggleStatusFilterMenu);
-    byId("hunterFilter").addEventListener("change", renderCompanies);
-    byId("saveProxyBtn").addEventListener("click", saveProxy);
-    byId("proxyEnableCheck").addEventListener("change", toggleProxyInput);
-    byId("refreshCompaniesBtn").addEventListener("click", refreshCompanies);
-    document.querySelectorAll(".time-filter-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
-            document.querySelectorAll(".time-filter-btn").forEach(b => b.classList.remove("active"));
-            btn.classList.add("active");
-            state.timeFilter = btn.dataset.filter;
-            loadCompaniesByTimeFilter();
+let workspaceReady = false;
+
+async function openWorkspace() {
+    if (!workspaceReady) {
+        workspaceReady = true;
+        byId("companyForm").addEventListener("submit", submitCompany);
+        byId("cancelEditButton").addEventListener("click", resetForm);
+        byId("importButton").addEventListener("click", importCompanies);
+        byId("importDataBtn").addEventListener("click", () => { setImportMode("merge"); byId("importFileInput").click(); });
+        byId("importOverwriteBtn").addEventListener("click", () => { setImportMode("overwrite"); byId("importFileInput").click(); });
+        byId("importFileInput").addEventListener("change", handleImportFile);
+        byId("backupBtn").addEventListener("click", createBackup);
+        byId("restoreBackupBtn").addEventListener("click", () => byId("restoreFileInput").click());
+        byId("restoreFileInput").addEventListener("change", restoreBackup);
+        byId("exportCsvBtn").addEventListener("click", () => exportCurrentAccount("/api/companies/export.csv", "csv"));
+        byId("exportJsonBtn").addEventListener("click", () => exportCurrentAccount("/api/companies/export.json", "json"));
+
+        byId("addStatusButton").addEventListener("click", addStatusOption);
+        byId("addIndustryButton").addEventListener("click", addIndustryOption);
+        byId("searchInput").addEventListener("input", renderCompanies);
+        byId("statusFilterBtn").addEventListener("click", toggleStatusFilterMenu);
+        byId("hunterFilter").addEventListener("change", renderCompanies);
+        byId("saveProxyBtn").addEventListener("click", saveProxy);
+        byId("proxyEnableCheck").addEventListener("change", toggleProxyInput);
+        byId("refreshCompaniesBtn").addEventListener("click", refreshCompanies);
+        document.querySelectorAll(".time-filter-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                document.querySelectorAll(".time-filter-btn").forEach(b => b.classList.remove("active"));
+                btn.classList.add("active");
+                state.timeFilter = btn.dataset.filter;
+                loadCompaniesByTimeFilter();
+            });
         });
-    });
-    byId("fixHistoryBtn").addEventListener("click", fixHistoryData);
-
-    try {
+        byId("fixHistoryBtn").addEventListener("click", fixHistoryData);
         setupWorkspaceResize();
         setupTableDragResize();
+    }
+    state.companies = [];
+    try {
         await loadVersion();
         await loadProxySettings();
         await loadSummary();
@@ -745,6 +777,37 @@ async function boot() {
     } catch (error) {
         showMessage("error", error.message);
     }
+}
+
+async function exportCurrentAccount(path, ext) {
+    clearMessages();
+    try {
+        await downloadAccountExport(path, ext);
+        showMessage("success", "已导出当前账号的公司记录");
+    } catch (error) {
+        showMessage("error", error.message);
+    }
+}
+
+async function downloadAccountExport(path, ext) {
+    const username = (state.account && state.account.username) || "account";
+    const token = sessionStorage.getItem("boss_auth_token");
+    const response = await fetch(path, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || "导出失败");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${username}-companies.${ext}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
 }
 
 async function loadProxySettings() {
@@ -857,3 +920,165 @@ async function fixHistoryData() {
 }
 
 document.addEventListener("DOMContentLoaded", boot);
+
+function showLoginGate() {
+    byId("loginGate").classList.remove("d-none");
+    byId("loginGate").style.display = "flex";
+}
+
+function hideLoginGate() {
+    byId("loginGate").style.display = "none";
+}
+
+function applyAccount(user) {
+    state.account = user;
+    const label = byId("currentUserLabel");
+    if (label) {
+        label.textContent = `${user.displayName || user.username}（${user.role === "admin" ? "管理员" : "账号"}）`;
+    }
+    byId("accountAdminBtn").classList.toggle("d-none", user.role !== "admin");
+}
+
+async function restoreSession() {
+    if (!sessionStorage.getItem("boss_auth_token")) {
+        return null;
+    }
+    try {
+        const data = await requestJson("/api/auth/me");
+        return data.user || null;
+    } catch (error) {
+        return null;
+    }
+}
+
+function bindAccountEvents() {
+    byId("loginForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        byId("loginError").textContent = "";
+        try {
+            const result = await requestJson("/api/auth/login", {
+                method: "POST",
+                body: JSON.stringify({
+                    username: byId("loginUsername").value.trim(),
+                    password: byId("loginPassword").value,
+                }),
+            });
+            sessionStorage.setItem("boss_auth_token", result.token);
+            hideLoginGate();
+            applyAccount(result.user);
+            await openWorkspace();
+        } catch (error) {
+            byId("loginError").textContent = error.message;
+        }
+    });
+    byId("registerForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        byId("registerError").textContent = "";
+        try {
+            const result = await requestJson("/api/auth/register", {
+                method: "POST",
+                body: JSON.stringify({
+                    username: byId("registerUsername").value.trim(),
+                    displayName: byId("registerDisplayName").value.trim(),
+                    password: byId("registerPassword").value,
+                }),
+            });
+            sessionStorage.setItem("boss_auth_token", result.token);
+            hideLoginGate();
+            applyAccount(result.user);
+            await openWorkspace();
+        } catch (error) {
+            byId("registerError").textContent = error.message;
+        }
+    });
+    byId("showRegisterBtn").addEventListener("click", () => {
+        byId("loginForm").classList.add("d-none");
+        byId("registerForm").classList.remove("d-none");
+    });
+    byId("showLoginBtn").addEventListener("click", () => {
+        byId("registerForm").classList.add("d-none");
+        byId("loginForm").classList.remove("d-none");
+    });
+    byId("logoutBtn").addEventListener("click", async () => {
+        try {
+            await requestJson("/api/auth/logout", { method: "POST" });
+        } catch (error) {
+            // 本地退出即可
+        }
+        sessionStorage.removeItem("boss_auth_token");
+        state.account = null;
+        state.companies = [];
+        renderCompanies();
+        showLoginGate();
+    });
+    byId("accountAdminBtn").addEventListener("click", () => {
+        byId("accountAdmin").classList.remove("d-none");
+        loadAccounts();
+    });
+    byId("closeAccountAdminBtn").addEventListener("click", () => {
+        byId("accountAdmin").classList.add("d-none");
+    });
+    byId("createAccountForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        byId("accountAdminError").textContent = "";
+        try {
+            await requestJson("/api/auth/users", {
+                method: "POST",
+                body: JSON.stringify({
+                    username: byId("newAccountUsername").value.trim(),
+                    displayName: byId("newAccountDisplayName").value.trim(),
+                    password: byId("newAccountPassword").value,
+                    role: byId("newAccountRole").value,
+                }),
+            });
+            byId("createAccountForm").reset();
+            await loadAccounts();
+        } catch (error) {
+            byId("accountAdminError").textContent = error.message;
+        }
+    });
+}
+
+async function loadAccounts() {
+    const data = await requestJson("/api/auth/users");
+    const body = byId("accountTableBody");
+    body.replaceChildren();
+    (data.users || []).forEach((user) => {
+        const row = document.createElement("tr");
+        const action = document.createElement("td");
+        if (!user.legacyStore) {
+            const lockBtn = document.createElement("button");
+            lockBtn.type = "button";
+            lockBtn.className = "btn btn-sm btn-outline-warning";
+            lockBtn.textContent = user.locked ? "解锁" : "锁定";
+            lockBtn.addEventListener("click", async () => {
+                await requestJson(`/api/auth/users/${user.id}`, {
+                    method: "PUT",
+                    body: JSON.stringify({ locked: !user.locked }),
+                });
+                await loadAccounts();
+            });
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.className = "btn btn-sm btn-outline-danger";
+            deleteBtn.textContent = "删除";
+            deleteBtn.addEventListener("click", async () => {
+                if (!window.confirm(`删除账号「${user.username}」？该公司数据不会自动并入其他账号。`)) {
+                    return;
+                }
+                await requestJson(`/api/auth/users/${user.id}`, { method: "DELETE" });
+                await loadAccounts();
+            });
+            action.append(lockBtn, deleteBtn);
+        } else {
+            action.textContent = "默认管理员";
+        }
+        row.innerHTML = `<td></td><td></td><td></td><td></td><td></td>`;
+        row.children[0].textContent = user.username;
+        row.children[1].textContent = user.displayName || "";
+        row.children[2].textContent = user.role === "admin" ? "管理员" : "普通账号";
+        row.children[3].textContent = user.locked ? "已锁定" : "正常";
+        row.children[4].replaceWith(action);
+        body.appendChild(row);
+    });
+}

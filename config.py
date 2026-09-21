@@ -97,6 +97,8 @@ class AppConfig:
     WECHAT_APPID = os.getenv("WECHAT_APPID", "")
     WECHAT_SECRET = os.getenv("WECHAT_SECRET", "")
     MINIAPP_DEV_TOKEN = os.getenv("MINIAPP_DEV_TOKEN", "")
+    ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
     # 0=开发兼容 Web 不强制鉴权；1=写接口与危险接口必须带 Token
     MINIAPP_AUTH_REQUIRED = os.getenv("MINIAPP_AUTH_REQUIRED", "0") == "1"
     AUTH_SESSION_TTL_SECONDS = int(os.getenv("AUTH_SESSION_TTL_SECONDS", str(7 * 24 * 3600)))
