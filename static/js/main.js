@@ -641,6 +641,59 @@ async function createBackup() {
     }
 }
 
+function openClearCompaniesModal() {
+    const modal = byId("clearCompaniesModal");
+    const input = byId("clearConfirmInput");
+    const error = byId("clearCompaniesError");
+    if (error) error.textContent = "";
+    if (input) input.value = "";
+    syncClearConfirmButton();
+    modal.classList.remove("d-none");
+    modal.style.display = "flex";
+    if (input) input.focus();
+}
+
+function closeClearCompaniesModal() {
+    const modal = byId("clearCompaniesModal");
+    modal.style.display = "none";
+    modal.classList.add("d-none");
+    byId("clearConfirmInput").value = "";
+    byId("clearCompaniesError").textContent = "";
+    syncClearConfirmButton();
+}
+
+function syncClearConfirmButton() {
+    const input = byId("clearConfirmInput");
+    const btn = byId("confirmClearCompaniesBtn");
+    if (!input || !btn) return;
+    btn.disabled = input.value.trim() !== "确认清空";
+}
+
+async function confirmClearCompanies() {
+    const input = byId("clearConfirmInput");
+    const error = byId("clearCompaniesError");
+    const btn = byId("confirmClearCompaniesBtn");
+    if (!input || input.value.trim() !== "确认清空") {
+        if (error) error.textContent = "请输入「确认清空」后再继续";
+        return;
+    }
+    if (btn) btn.disabled = true;
+    if (error) error.textContent = "";
+    clearMessages();
+    try {
+        const result = await requestJson("/api/companies/clear", { method: "POST" });
+        closeClearCompaniesModal();
+        showMessage("success", result.message || "已清空公司记录");
+        renderSummary(result.summary || {});
+        state.companies = result.items || [];
+        renderCompanies();
+        resetForm();
+    } catch (err) {
+        if (error) error.textContent = err.message;
+        syncClearConfirmButton();
+    }
+}
+
 function setupWorkspaceResize() {
     const handle = byId("workspaceResizeHandle");
     const sidePanel = document.querySelector(".side-panel");
@@ -873,6 +926,10 @@ async function openWorkspace() {
         byId("importOverwriteBtn").addEventListener("click", () => { setImportMode("overwrite"); byId("importFileInput").click(); });
         byId("importFileInput").addEventListener("change", handleImportFile);
         byId("backupBtn").addEventListener("click", createBackup);
+        byId("clearCompaniesBtn").addEventListener("click", openClearCompaniesModal);
+        byId("cancelClearCompaniesBtn").addEventListener("click", closeClearCompaniesModal);
+        byId("confirmClearCompaniesBtn").addEventListener("click", confirmClearCompanies);
+        byId("clearConfirmInput").addEventListener("input", syncClearConfirmButton);
         byId("exportCsvBtn").addEventListener("click", () => exportCurrentAccount("/api/companies/export.csv", "csv"));
         // 备份文件请用「导入备份 / 导入并覆盖」，不再单独提供还原按钮
 

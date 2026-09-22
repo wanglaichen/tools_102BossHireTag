@@ -339,6 +339,18 @@ def import_companies_overwrite():
     )
 
 
+@app.route("/api/companies/clear", methods=["POST"])
+def clear_companies():
+    """清空当前账号公司记录；保留交流状态、行业等自定义标签。"""
+    result = _cs().clear_companies()
+    return jsonify(
+        {
+            "message": f"已清空当前账号 {result['cleared_count']} 条公司记录（自定义标签已保留）",
+            **result,
+        }
+    )
+
+
 @app.route("/api/companies/export.csv", methods=["GET"])
 def export_companies_csv():
     """导出当前账号公司数据为 CSV，不含账号信息。"""

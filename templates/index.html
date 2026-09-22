@@ -189,6 +189,7 @@
                         <button class="btn btn-outline-primary" id="backupBtn" type="button">下载备份</button>
                         <button class="btn btn-outline-primary" id="importDataBtn">导入备份</button>
                         <button class="btn btn-outline-danger" id="importOverwriteBtn">导入并覆盖</button>
+                        <button class="btn btn-outline-danger" id="clearCompaniesBtn" type="button">清空记录</button>
                         <button class="btn btn-outline-secondary" id="exportCsvBtn" type="button">导出 CSV</button>
                     </div>
                     <input type="file" id="importFileInput" accept=".json,.csv" class="d-none">
@@ -244,6 +245,29 @@
             <button class="btn btn-outline-secondary w-100" id="showLoginBtn" type="button">返回登录</button>
             <div id="registerError" class="login-error"></div>
         </form>
+    </div>
+
+    <div id="clearCompaniesModal" class="login-gate d-none" style="display:none;">
+        <div class="login-card clear-confirm-card">
+            <h2>清空当前账号记录</h2>
+            <div class="clear-confirm-warning">
+                <p><strong>此操作不可撤销。</strong></p>
+                <ul>
+                    <li>将删除：当前登录账号下的<strong>全部公司投递记录</strong></li>
+                    <li>不会删除：左侧「交流状态」「行业」的<strong>自定义标签</strong></li>
+                    <li>不会删除：账号本身及其他账号的数据</li>
+                </ul>
+                <p>请先下载备份后再清空。若确定继续，请在下方输入：<code>确认清空</code></p>
+            </div>
+            <label>确认文字
+                <input id="clearConfirmInput" class="form-control" autocomplete="off" placeholder="确认清空">
+            </label>
+            <div class="clear-confirm-actions">
+                <button class="btn btn-outline-secondary" id="cancelClearCompaniesBtn" type="button">取消</button>
+                <button class="btn btn-danger" id="confirmClearCompaniesBtn" type="button" disabled>确认清空</button>
+            </div>
+            <div id="clearCompaniesError" class="login-error"></div>
+        </div>
     </div>
 
     <div id="accountAdmin" class="account-admin d-none">

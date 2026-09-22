@@ -227,6 +227,38 @@ class CompanyService:
             self.storage.write(data)
         return {"deleted": True, "id": company_id}
 
+    def clear_companies(self) -> dict[str, Any]:
+        """清空当前账号全部公司记录，保留交流状态/行业等自定义标签。"""
+        data = self._read_state()
+        companies = list(data.get("companies") or [])
+        cleared_count = len(companies)
+        base_ids = [str(item.get("id")) for item in companies if item.get("id")]
+        now = self._now()
+        data["companies"] = []
+        meta = data.setdefault("meta", {})
+        if not isinstance(meta, dict):
+            meta = {}
+            data["meta"] = meta
+        meta["last_changed_at"] = now
+        meta["cleared_at"] = now
+        # 故意不改 settings / status_options / industry_options
+        self.storage.write(data, replace=True, base_ids=base_ids)
+        if hasattr(self.storage, "primary") and hasattr(self.storage.primary, "rebuild_timestamps_index"):
+            try:
+                self.storage.primary.rebuild_timestamps_index()
+            except Exception:
+                pass
+        elif hasattr(self.storage, "rebuild_timestamps_index"):
+            try:
+                self.storage.rebuild_timestamps_index()
+            except Exception:
+                pass
+        return {
+            "cleared_count": cleared_count,
+            "items": self.list_companies(),
+            "summary": self.get_summary(),
+        }
+
     def _save_record(self, data: dict[str, Any], record: dict[str, Any]) -> None:
         if hasattr(self.storage, "upsert_company"):
             self.storage.upsert_company(record, {"last_changed_at": data["meta"].get("last_changed_at") or self._now()})
