@@ -285,6 +285,7 @@ class CompanyService:
             data["companies"] = new_companies
             data["meta"]["last_changed_at"] = self._now()
             self.storage.write(data, replace=True, base_ids=base_ids)
+            self._ensure_imported_option_tags(None, new_companies)
             return {
                 "imported_count": imported_count,
                 "updated_count": len(new_companies) - imported_count,
@@ -329,6 +330,7 @@ class CompanyService:
                 self.storage.upsert_company(item, {"last_changed_at": now})
         else:
             self.storage.write(data)
+        self._ensure_imported_option_tags(None, touched)
         return {
             "imported_count": imported_count,
             "updated_count": updated_count,
@@ -356,13 +358,14 @@ class CompanyService:
         return None
 
     def _merge_backup_companies(self, payload: Any) -> dict[str, Any]:
-        companies_raw, _settings, _schema = self._extract_backup_parts(payload)
+        companies_raw, settings_raw, _schema = self._extract_backup_parts(payload)
         data = self._read_state()
         imported_count = 0
         updated_count = 0
         skipped_count = 0
         touched: list[dict[str, Any]] = []
         now = self._now()
+        merged_records: list[dict[str, Any]] = []
 
         for item in companies_raw:
             record = self._normalize_backup_company(item)
@@ -378,10 +381,12 @@ class CompanyService:
                 existing["created_at"] = keep_created
                 existing["updated_at"] = now
                 touched.append(existing)
+                merged_records.append(existing)
                 updated_count += 1
             else:
                 data["companies"].append(record)
                 touched.append(record)
+                merged_records.append(record)
                 imported_count += 1
 
         data["meta"]["last_changed_at"] = now
@@ -390,6 +395,10 @@ class CompanyService:
                 self.storage.upsert_company(item, {"last_changed_at": now})
         else:
             self.storage.write(data)
+
+        # 增量导入：先把备份里的自定义标签补进当前账号
+        self._ensure_imported_option_tags(settings_raw, merged_records)
+
         return {
             "imported_count": imported_count,
             "updated_count": updated_count,
@@ -432,7 +441,7 @@ class CompanyService:
 
         state = self._read_state()
         companies = list(state.get("companies") or [])
-        settings = self.get_settings()
+        settings = self._build_backup_settings(companies)
         created_at = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         version_tag = "".join(ch for ch in (app_version or "unknown") if ch.isalnum() or ch in "._-") or "unknown"
         account_info = None
@@ -457,6 +466,9 @@ class CompanyService:
             "account": account_info,
             "companies": companies,
             "settings": settings,
+            # 单独列出标签数组，方便跨账号导入时直接补选项
+            "status_options": list(settings.get("status_options") or []),
+            "industry_options": list(settings.get("industry_options") or []),
             "meta": state.get("meta") or {},
         }
 
@@ -544,7 +556,10 @@ class CompanyService:
         self.storage.write(data, replace=True, base_ids=base_ids)
 
         if settings_raw is not None:
-            self.update_settings(settings_raw)
+            # 覆盖时以备份标签为主，并补上公司记录里出现过的自定义值
+            self._apply_imported_option_tags(settings_raw, records, replace=True)
+        else:
+            self._ensure_imported_option_tags(None, records)
 
         if hasattr(self.storage, "primary") and hasattr(self.storage.primary, "rebuild_timestamps_index"):
             self.storage.primary.rebuild_timestamps_index()
@@ -593,7 +608,108 @@ class CompanyService:
         settings = payload.get("settings")
         if settings is not None and not isinstance(settings, dict):
             settings = None
+        if settings is None:
+            settings = {}
+        # 兼容顶层单独写出的标签数组
+        if isinstance(payload.get("status_options"), list):
+            settings = dict(settings)
+            settings["status_options"] = payload.get("status_options")
+        if isinstance(payload.get("industry_options"), list):
+            settings = dict(settings)
+            settings["industry_options"] = payload.get("industry_options")
+        if not settings:
+            settings = None
         return companies, settings, schema_version
+
+    def _build_backup_settings(self, companies: list[dict[str, Any]]) -> dict[str, list[str]]:
+        current = self.get_settings()
+        status_tags, industry_tags = self._collect_option_tags(companies)
+        return {
+            "status_options": self._union_options(current.get("status_options"), status_tags),
+            "industry_options": self._union_options(current.get("industry_options"), industry_tags),
+        }
+
+    def _collect_option_tags(self, companies: list[dict[str, Any]] | None) -> tuple[list[str], list[str]]:
+        statuses: list[str] = []
+        industries: list[str] = []
+        for item in companies or []:
+            if not isinstance(item, dict):
+                continue
+            for part in str(item.get("effect_status") or "").split(","):
+                text = part.strip()
+                if text:
+                    statuses.append(text)
+            for part in str(item.get("industry") or "").split(","):
+                text = part.strip()
+                if text:
+                    industries.append(text)
+        return statuses, industries
+
+    @staticmethod
+    def _union_options(*groups: Any) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for group in groups:
+            if not isinstance(group, list):
+                continue
+            for item in group:
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                key = text.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(text)
+                if len(ordered) >= 50:
+                    return ordered
+        return ordered
+
+    def _ensure_imported_option_tags(
+        self,
+        settings_raw: dict[str, Any] | None,
+        companies: list[dict[str, Any]] | None,
+    ) -> dict[str, list[str]]:
+        """增量导入：把备份标签和记录里的自定义值合并进当前账号配置。"""
+        return self._apply_imported_option_tags(settings_raw, companies, replace=False)
+
+    def _apply_imported_option_tags(
+        self,
+        settings_raw: dict[str, Any] | None,
+        companies: list[dict[str, Any]] | None,
+        *,
+        replace: bool,
+    ) -> dict[str, list[str]]:
+        current = self.get_settings()
+        incoming = self._normalize_settings(settings_raw or {})
+        status_tags, industry_tags = self._collect_option_tags(companies)
+        if replace:
+            next_settings = {
+                "status_options": self._union_options(
+                    incoming.get("status_options"),
+                    status_tags,
+                    DEFAULT_SETTINGS["status_options"],
+                ),
+                "industry_options": self._union_options(
+                    incoming.get("industry_options"),
+                    industry_tags,
+                    DEFAULT_SETTINGS["industry_options"],
+                ),
+            }
+        else:
+            next_settings = {
+                "status_options": self._union_options(
+                    current.get("status_options"),
+                    incoming.get("status_options"),
+                    status_tags,
+                ),
+                "industry_options": self._union_options(
+                    current.get("industry_options"),
+                    incoming.get("industry_options"),
+                    industry_tags,
+                ),
+            }
+        return self.update_settings(next_settings)
 
     def _normalize_backup_company(self, item: Any) -> dict[str, Any] | None:
         if not isinstance(item, dict):
