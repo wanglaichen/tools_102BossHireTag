@@ -460,6 +460,78 @@ select[multiple] {
     background: rgba(248, 81, 73, 0.2);
 }
 
+.status-interview-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.status-interview-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.status-interview-bottom {
+    opacity: 0.95;
+}
+
+.col-head-with-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.col-hint-dot {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.28);
+    cursor: help;
+    flex-shrink: 0;
+    z-index: 2;
+}
+
+.col-hint-dot:hover,
+.col-hint-dot:focus-visible {
+    background: #79b8ff;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.45);
+    outline: none;
+}
+
+.col-hint-float {
+    position: fixed;
+    z-index: 10000;
+    max-width: 240px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(15, 20, 28, 0.96);
+    color: #f5f7fb;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+    white-space: pre-line;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.col-hint-float.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
 .industry-tag {
     background: rgba(88, 166, 255, 0.15);
     color: var(--blue);
@@ -486,6 +558,19 @@ select[multiple] {
     white-space: pre-wrap;
     word-break: break-word;
     color: var(--muted);
+}
+
+.time-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+
+.time-stack span:last-child {
+    color: var(--muted);
+    font-size: 12px;
 }
 
 .row-actions {

@@ -26,6 +26,7 @@ BACKUP_SCHEMA_VERSION = 1
 HEADER_ALIASES = {
     "企业名称": "company_name",
     "公司名称": "company_name",
+    "交流状态": "effect_status",
     "效果状态": "effect_status",
     "行业": "industry",
     "是否是猎头": "is_hunter",
@@ -326,7 +327,7 @@ class CompanyService:
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(
-            ["企业名称", "效果状态", "行业", "是否是猎头", "是否是外包", "是否已面试", "备注", "创建时间", "更新时间"]
+            ["企业名称", "交流状态", "行业", "是否是猎头", "是否是外包", "是否已面试", "备注", "创建时间", "更新时间"]
         )
         for item in self.list_companies():
             writer.writerow(
@@ -580,7 +581,7 @@ class CompanyService:
         if not isinstance(items, list) or not items:
             return text
         flag = {"yes": "是", "no": "否", "unknown": ""}
-        lines = ["企业名称\t效果状态\t行业\t是否是猎头\t是否是外包\t是否已面试\t备注"]
+        lines = ["企业名称\t交流状态\t行业\t是否是猎头\t是否是外包\t是否已面试\t备注"]
         for item in items:
             if not isinstance(item, dict):
                 continue

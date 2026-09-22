@@ -136,15 +136,68 @@ function populateSelectOptions(selectId, options, placeholder) {
     setSelectValues(selectId, selectedValues);
 }
 
+function parseDateValue(value) {
+    if (value == null || value === "") {
+        return null;
+    }
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+        const ms = value < 1e12 ? value * 1000 : value;
+        const date = new Date(ms);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+    const text = String(value).trim();
+    if (!text) {
+        return null;
+    }
+    if (/^\d{10,13}$/.test(text)) {
+        const num = Number(text);
+        const ms = text.length <= 10 ? num * 1000 : num;
+        const date = new Date(ms);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+    const date = new Date(text);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function pad2(n) {
+    return String(n).padStart(2, "0");
+}
+
+function formatTimeParts(value) {
+    const date = parseDateValue(value);
+    if (!date) {
+        return null;
+    }
+    const y = date.getFullYear();
+    const m = pad2(date.getMonth() + 1);
+    const d = pad2(date.getDate());
+    const hh = pad2(date.getHours());
+    const mm = pad2(date.getMinutes());
+    const ss = pad2(date.getSeconds());
+    return {
+        date: `${y}-${m}-${d}`,
+        time: `${hh}:${mm}:${ss}`,
+        text: `${y}-${m}-${d} ${hh}:${mm}:${ss}`,
+    };
+}
+
 function formatTime(value) {
-    if (!value) {
-        return "-";
+    const parts = formatTimeParts(value);
+    if (!parts) {
+        return value ? String(value) : "-";
     }
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-        return value;
+    return parts.text;
+}
+
+function formatTimeHtml(value) {
+    const parts = formatTimeParts(value);
+    if (!parts) {
+        return escapeHtml(value ? String(value) : "-");
     }
-    return date.toLocaleString("zh-CN", { hour12: false });
+    return `<div class="time-stack"><span>${parts.date}</span><span>${parts.time}</span></div>`;
 }
 
 function escapeHtml(value) {
@@ -166,6 +219,34 @@ function flagLabel(value) {
     return "未标记";
 }
 
+function hunterLabel(value) {
+    if (value === "yes") {
+        return "是猎头";
+    }
+    if (value === "no") {
+        return "不是猎头";
+    }
+    return "未标记";
+}
+
+function outsourcedLabel(value) {
+    if (value === "yes") {
+        return "是外包";
+    }
+    if (value === "no") {
+        return "不是外包";
+    }
+    return "未标记";
+}
+
+function interviewLabel(value) {
+    return value === "yes" ? "已面试" : "未面试";
+}
+
+function interviewFlagClass(value) {
+    return value === "yes" ? "yes" : "no";
+}
+
 function renderSummary(summary) {
     state.summary = summary;
     byId("companyCount").textContent = summary.company_count ?? 0;
@@ -179,7 +260,7 @@ function renderSummary(summary) {
     state.settings = summary.settings || state.settings;
     renderStatusFilter(summary.statuses || []);
     renderConfigChips();
-    populateSelectOptions("effectStatusInput", state.settings.status_options || [], "请选择效果状态");
+    populateSelectOptions("effectStatusInput", state.settings.status_options || [], "请选择交流状态");
     populateSelectOptions("industryInput", state.settings.industry_options || [], "请选择行业");
 }
 
@@ -260,7 +341,9 @@ function getFilteredCompanies() {
             item.industry,
             flagLabel(item.is_hunter),
             flagLabel(item.is_outsourced),
-            flagLabel(item.is_interviewed),
+            hunterLabel(item.is_hunter),
+            outsourcedLabel(item.is_outsourced),
+            interviewLabel(item.is_interviewed),
             item.note,
         ]
             .join(" ")
@@ -282,33 +365,50 @@ function renderCompanies() {
     tbody.innerHTML = "";
 
     if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="9" class="empty-cell">暂无匹配记录</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">暂无匹配记录</td></tr>';
         return;
     }
 
     items.forEach((item) => {
         const tr = document.createElement("tr");
-        const isRejected = (item.effect_status || "").split(",").some(v => v.includes("拒绝"));
         const statusParts = (item.effect_status || "未填写").split(",");
         const industryParts = (item.industry || "-").split(",");
+        const interviewText = interviewLabel(item.is_interviewed);
+        const interviewClass = interviewFlagClass(item.is_interviewed);
+        const hunterClass = escapeHtml(item.is_hunter || "unknown");
+        const outsourcedClass = escapeHtml(item.is_outsourced || "unknown");
         tr.innerHTML = `
             <td>
                 <div class="company-name">${escapeHtml(item.company_name)}</div>
                 <div class="muted-line">创建: ${formatTime(item.created_at)}</div>
             </td>
-            <td>${statusParts.map(s => `<span class="status-pill ${s.includes("拒绝") ? "rejected" : ""}">${escapeHtml(s)}</span>`).join(" ")}</td>
-            <td>${industryParts.map(i => `<span class="industry-tag">${escapeHtml(i)}</span>`).join(" ")}</td>
-            <td><span class="flag-badge ${escapeHtml(item.is_hunter || "unknown")}">${flagLabel(item.is_hunter)}</span></td>
-            <td><span class="flag-badge ${escapeHtml(item.is_outsourced || "unknown")}">${flagLabel(item.is_outsourced)}</span></td>
-            <td><span class="flag-badge ${escapeHtml(item.is_interviewed || "unknown")}">${flagLabel(item.is_interviewed)}</span></td>
-            <td class="note-cell">${escapeHtml(item.note || "")}</td>
-            <td>${formatTime(item.updated_at)}</td>
             <td>
                 <div class="row-actions">
                     <button class="btn btn-sm btn-outline-primary" data-action="edit">编辑</button>
                     <button class="btn btn-sm btn-outline-danger" data-action="delete">删除</button>
                 </div>
             </td>
+            <td>
+                <div class="status-interview-cell">
+                    <div class="status-interview-row status-interview-top">${statusParts.map(s => `<span class="status-pill ${s.includes("拒绝") ? "rejected" : ""}">${escapeHtml(s)}</span>`).join(" ")}</div>
+                    <div class="status-interview-row status-interview-bottom">
+                        <span class="flag-badge ${interviewClass}">${escapeHtml(interviewText)}</span>
+                    </div>
+                </div>
+            </td>
+            <td>${industryParts.map(i => `<span class="industry-tag">${escapeHtml(i)}</span>`).join(" ")}</td>
+            <td>
+                <div class="status-interview-cell">
+                    <div class="status-interview-row">
+                        <span class="flag-badge ${hunterClass}">${escapeHtml(hunterLabel(item.is_hunter))}</span>
+                    </div>
+                    <div class="status-interview-row">
+                        <span class="flag-badge ${outsourcedClass}">${escapeHtml(outsourcedLabel(item.is_outsourced))}</span>
+                    </div>
+                </div>
+            </td>
+            <td class="note-cell">${escapeHtml(item.note || "")}</td>
+            <td>${formatTimeHtml(item.updated_at)}</td>
         `;
         tr.querySelector('[data-action="edit"]').addEventListener("click", () => fillForm(item));
         tr.querySelector('[data-action="delete"]').addEventListener("click", () => deleteCompany(item));
@@ -605,6 +705,57 @@ function setupWorkspaceResize() {
     });
 }
 
+function setupColumnHintTips() {
+    let tipEl = document.querySelector(".col-hint-float");
+    if (!tipEl) {
+        tipEl = document.createElement("div");
+        tipEl.className = "col-hint-float";
+        tipEl.setAttribute("role", "tooltip");
+        document.body.appendChild(tipEl);
+    }
+
+    const hideTip = () => {
+        tipEl.classList.remove("is-visible");
+    };
+
+    const showTip = (dot) => {
+        const text = (dot.getAttribute("data-tip") || "").replace(/&#10;/g, "\n");
+        if (!text) {
+            return;
+        }
+        tipEl.textContent = text;
+        tipEl.classList.add("is-visible");
+        const rect = dot.getBoundingClientRect();
+        const tipWidth = tipEl.offsetWidth || 120;
+        const tipHeight = tipEl.offsetHeight || 40;
+        let left = rect.left + rect.width / 2 - tipWidth / 2;
+        let top = rect.bottom + 8;
+        left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
+        if (top + tipHeight > window.innerHeight - 8) {
+            top = rect.top - tipHeight - 8;
+        }
+        tipEl.style.left = `${left}px`;
+        tipEl.style.top = `${top}px`;
+    };
+
+    document.querySelectorAll(".col-hint-dot").forEach((dot) => {
+        dot.addEventListener("mouseenter", () => showTip(dot));
+        dot.addEventListener("mouseleave", hideTip);
+        dot.addEventListener("focus", () => showTip(dot));
+        dot.addEventListener("blur", hideTip);
+        dot.addEventListener("mousedown", (event) => {
+            event.stopPropagation();
+        });
+        dot.addEventListener("dragstart", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+    });
+
+    window.addEventListener("scroll", hideTip, true);
+    window.addEventListener("resize", hideTip);
+}
+
 function setupTableDragResize() {
     const table = byId("companyTable");
     if (!table) return;
@@ -774,6 +925,7 @@ async function openWorkspace() {
         byId("fixHistoryBtn").addEventListener("click", fixHistoryData);
         setupWorkspaceResize();
         setupTableDragResize();
+        setupColumnHintTips();
     }
     state.companies = [];
     try {
