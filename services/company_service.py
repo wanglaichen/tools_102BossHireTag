@@ -237,6 +237,20 @@ class CompanyService:
         if not text.strip():
             raise ValueError("导入内容不能为空")
 
+        backup_payload = self._try_parse_structured_payload(text)
+        if backup_payload is not None:
+            if overwrite:
+                # 下载备份 + 导入并覆盖：完整替换当前账号公司与设置
+                restored = self.restore_backup(backup_payload)
+                return {
+                    "imported_count": restored["restored_count"],
+                    "updated_count": 0,
+                    "skipped_count": restored["skipped_count"],
+                    "items": restored["items"],
+                    "summary": restored["summary"],
+                }
+            return self._merge_backup_companies(backup_payload)
+
         text = self._coerce_import_text(text)
         data = self._read_state()
         rows = self._parse_rows(text)
@@ -323,6 +337,67 @@ class CompanyService:
             "summary": self.get_summary(),
         }
 
+    def _try_parse_structured_payload(self, text: str) -> Any | None:
+        stripped = text.strip()
+        if not stripped.startswith("{") and not stripped.startswith("["):
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, list):
+            return payload if payload else None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("type") == BACKUP_TYPE:
+            return payload
+        if isinstance(payload.get("companies"), list) or isinstance(payload.get("items"), list):
+            return payload
+        return None
+
+    def _merge_backup_companies(self, payload: Any) -> dict[str, Any]:
+        companies_raw, _settings, _schema = self._extract_backup_parts(payload)
+        data = self._read_state()
+        imported_count = 0
+        updated_count = 0
+        skipped_count = 0
+        touched: list[dict[str, Any]] = []
+        now = self._now()
+
+        for item in companies_raw:
+            record = self._normalize_backup_company(item)
+            if not record:
+                skipped_count += 1
+                continue
+            existing = self._find_by_name(data["companies"], record["company_name"])
+            if existing:
+                keep_id = existing["id"]
+                keep_created = existing.get("created_at") or record.get("created_at") or now
+                existing.update(record)
+                existing["id"] = keep_id
+                existing["created_at"] = keep_created
+                existing["updated_at"] = now
+                touched.append(existing)
+                updated_count += 1
+            else:
+                data["companies"].append(record)
+                touched.append(record)
+                imported_count += 1
+
+        data["meta"]["last_changed_at"] = now
+        if hasattr(self.storage, "upsert_company"):
+            for item in touched:
+                self.storage.upsert_company(item, {"last_changed_at": now})
+        else:
+            self.storage.write(data)
+        return {
+            "imported_count": imported_count,
+            "updated_count": updated_count,
+            "skipped_count": skipped_count,
+            "items": self.list_companies(),
+            "summary": self.get_summary(),
+        }
+
     def export_csv(self) -> str:
         output = io.StringIO()
         writer = csv.writer(output)
@@ -345,7 +420,13 @@ class CompanyService:
             )
         return output.getvalue()
 
-    def create_backup(self, backup_dir: str, keep_count: int = 20, app_version: str = "") -> dict[str, Any]:
+    def create_backup(
+        self,
+        backup_dir: str,
+        keep_count: int = 20,
+        app_version: str = "",
+        account: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Create a portable full JSON backup on disk and return metadata + payload."""
         from pathlib import Path
 
@@ -354,7 +435,18 @@ class CompanyService:
         settings = self.get_settings()
         created_at = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         version_tag = "".join(ch for ch in (app_version or "unknown") if ch.isalnum() or ch in "._-") or "unknown"
-        filename = f"backup_{version_tag}_{created_at}.json"
+        account_info = None
+        if isinstance(account, dict) and account.get("id"):
+            account_info = {
+                "id": str(account.get("id") or ""),
+                "username": str(account.get("username") or ""),
+                "displayName": str(account.get("displayName") or account.get("username") or ""),
+            }
+        account_tag = ""
+        if account_info and account_info["username"]:
+            safe = "".join(ch for ch in account_info["username"] if ch.isalnum() or ch in "._-") or "account"
+            account_tag = f"_{safe}"
+        filename = f"backup_{version_tag}{account_tag}_{created_at}.json"
         payload = {
             "type": BACKUP_TYPE,
             "schema_version": BACKUP_SCHEMA_VERSION,
@@ -362,6 +454,7 @@ class CompanyService:
             "app_version": app_version or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "company_count": len(companies),
+            "account": account_info,
             "companies": companies,
             "settings": settings,
             "meta": state.get("meta") or {},
@@ -384,7 +477,8 @@ class CompanyService:
                 pass
 
         return {
-            "message": f"备份完成，共 {len(companies)} 条公司记录",
+            "message": f"备份完成，共 {len(companies)} 条公司记录"
+            + (f"（账号 {account_info['username']}）" if account_info and account_info.get("username") else ""),
             "filename": filename,
             "path": str(file_path),
             "company_count": len(companies),

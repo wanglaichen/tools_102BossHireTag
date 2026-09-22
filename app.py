@@ -330,9 +330,10 @@ def import_companies():
 def import_companies_overwrite():
     payload = request.get_json(silent=True) or {}
     result = _cs().import_rows(payload.get("text", ""), overwrite=True)
+    count = result.get("imported_count", 0) + result.get("updated_count", 0)
     return jsonify(
         {
-            "message": f"已覆盖导入 {result['imported_count']} 条",
+            "message": f"已覆盖导入 {count} 条",
             **result,
         }
     )
@@ -340,6 +341,7 @@ def import_companies_overwrite():
 
 @app.route("/api/companies/export.csv", methods=["GET"])
 def export_companies_csv():
+    """导出当前账号公司数据为 CSV，不含账号信息。"""
     body = _cs().export_csv()
     return Response(
         body.encode("utf-8-sig"),
@@ -348,28 +350,14 @@ def export_companies_csv():
     )
 
 
-@app.route("/api/companies/export.json", methods=["GET"])
-def export_companies_json():
-    user = g.account
-    body = json.dumps(
-        {
-            "account": {"id": user["id"], "username": user["username"]},
-            "items": _cs().list_companies(),
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
-    return Response(
-        body,
-        mimetype="application/json; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename={_export_filename('json')}"},
-    )
-
-
 @app.route("/api/backup", methods=["POST"])
 def create_backup():
-    """Create a full backup on server and return metadata (payload included for client download)."""
-    result = _cs().create_backup(_backup_dir(), app_version=AppConfig.APP_VERSION)
+    """Create a full backup for the current account and return metadata + downloadable payload."""
+    result = _cs().create_backup(
+        _backup_dir(),
+        app_version=AppConfig.APP_VERSION,
+        account=g.account,
+    )
     return jsonify(
         {
             "message": result["message"],
@@ -383,8 +371,12 @@ def create_backup():
 
 @app.route("/api/backup", methods=["GET"])
 def download_backup():
-    """One-click: save backup on server and download the file."""
-    result = _cs().create_backup(_backup_dir(), app_version=AppConfig.APP_VERSION)
+    """One-click: save current-account backup on server and download the file."""
+    result = _cs().create_backup(
+        _backup_dir(),
+        app_version=AppConfig.APP_VERSION,
+        account=g.account,
+    )
     body = json.dumps(result["payload"], ensure_ascii=False, indent=2) + "\n"
     return Response(
         body,

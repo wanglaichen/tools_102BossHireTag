@@ -580,6 +580,13 @@ let lastImportMode = "merge"; // "merge" or "overwrite"
 async function handleImportFile(event) {
     const file = event.target.files[0];
     if (!file) return;
+    if (lastImportMode === "overwrite") {
+        const confirmed = window.confirm("导入并覆盖会用所选文件完全替换当前账号的公司数据，且不可撤销。确定继续？");
+        if (!confirmed) {
+            event.target.value = "";
+            return;
+        }
+    }
     clearMessages();
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -626,45 +633,10 @@ async function createBackup() {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-        showMessage("success", (result.message || "备份完成") + "，文件已下载，可带到其他版本还原");
+        showMessage("success", (result.message || "备份完成") + "。可用「导入备份」增量合并，或「导入并覆盖」完全替换");
     } catch (error) {
         showMessage("error", error.message);
     } finally {
-        if (btn) btn.disabled = false;
-    }
-}
-
-async function restoreBackup(event) {
-    const file = event.target.files && event.target.files[0];
-    if (!file) return;
-    const confirmed = window.confirm("还原会用该备份覆盖当前全部公司和设置，且不可撤销。确定继续？");
-    if (!confirmed) {
-        event.target.value = "";
-        return;
-    }
-    clearMessages();
-    const btn = byId("restoreBackupBtn");
-    if (btn) btn.disabled = true;
-    try {
-        const text = await file.text();
-        let payload;
-        try {
-            payload = JSON.parse(text);
-        } catch (error) {
-            throw new Error("备份文件不是有效的 JSON");
-        }
-        const result = await requestJson("/api/backup/restore", {
-            method: "POST",
-            body: JSON.stringify(payload),
-        });
-        showMessage("success", result.message || "还原完成");
-        renderSummary(result.summary || {});
-        state.companies = result.items || [];
-        renderCompanies();
-    } catch (error) {
-        showMessage("error", error.message);
-    } finally {
-        event.target.value = "";
         if (btn) btn.disabled = false;
     }
 }
@@ -901,10 +873,8 @@ async function openWorkspace() {
         byId("importOverwriteBtn").addEventListener("click", () => { setImportMode("overwrite"); byId("importFileInput").click(); });
         byId("importFileInput").addEventListener("change", handleImportFile);
         byId("backupBtn").addEventListener("click", createBackup);
-        byId("restoreBackupBtn").addEventListener("click", () => byId("restoreFileInput").click());
-        byId("restoreFileInput").addEventListener("change", restoreBackup);
         byId("exportCsvBtn").addEventListener("click", () => exportCurrentAccount("/api/companies/export.csv", "csv"));
-        byId("exportJsonBtn").addEventListener("click", () => exportCurrentAccount("/api/companies/export.json", "json"));
+        // 备份文件请用「导入备份 / 导入并覆盖」，不再单独提供还原按钮
 
         byId("addStatusButton").addEventListener("click", addStatusOption);
         byId("addIndustryButton").addEventListener("click", addIndustryOption);
@@ -942,7 +912,11 @@ async function exportCurrentAccount(path, ext) {
     clearMessages();
     try {
         await downloadAccountExport(path, ext);
-        showMessage("success", "已导出当前账号的公司记录");
+        if (ext === "csv") {
+            showMessage("success", "已导出当前账号公司记录（CSV 不含账号信息）");
+        } else {
+            showMessage("success", "已导出当前账号的公司记录");
+        }
     } catch (error) {
         showMessage("error", error.message);
     }
