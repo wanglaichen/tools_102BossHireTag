@@ -46,7 +46,7 @@ class AuthService:
         self.secret_key = secret_key or "tools102-boss-hire-tag-dev"
         self.wechat_appid = (wechat_appid or "").strip()
         self.wechat_secret = (wechat_secret or "").strip()
-        self.session_ttl_seconds = session_ttl_seconds
+        self.session_ttl_seconds = max(24 * 3600, int(session_ttl_seconds or 0))
         self.dev_token = (dev_token or "").strip()
         self.admin_username = (admin_username or "").strip().lower()
         self.admin_password = admin_password or ""
@@ -165,6 +165,10 @@ class AuthService:
                 if raw:
                     data = json.loads(raw)
                     if isinstance(data, dict):
+                        try:
+                            client.expire(self._sessions_key, self.session_ttl_seconds)
+                        except Exception:
+                            pass
                         return data
             except Exception:
                 pass
@@ -449,13 +453,21 @@ class AuthService:
         client = self.client
         if client is not None:
             try:
-                user_id = client.get(self._account_session_key(token))
+                key = self._account_session_key(token)
+                user_id = client.get(key)
                 if user_id:
+                    # 滑动续期：有有效请求就重新计时，闲置满一天也不应半途掉线
+                    try:
+                        client.expire(key, self.session_ttl_seconds)
+                    except Exception:
+                        pass
                     return str(user_id)
             except Exception:
                 pass
         cached = self._memory.get(f"session:{token}")
         if isinstance(cached, dict) and cached.get("expiresAt", 0) > int(time.time()):
+            cached["expiresAt"] = int(time.time()) + self.session_ttl_seconds
+            self._memory[f"session:{token}"] = cached
             return str(cached.get("userId") or "")
         return None
 

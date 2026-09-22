@@ -11,6 +11,11 @@ const state = {
     account: null,
 };
 
+// 页面闲置时定时续期会话，保证开着一天不刷新也不掉登录
+const SESSION_KEEPALIVE_MS = 30 * 60 * 1000;
+let sessionKeepaliveTimer = null;
+let sessionVisibilityBound = false;
+
 function byId(id) {
     return document.getElementById(id);
 }
@@ -47,6 +52,8 @@ async function requestJson(url, options = {}) {
     const data = await response.json().catch(() => ({}));
     if (response.status === 401) {
         sessionStorage.removeItem("boss_auth_token");
+        state.account = null;
+        stopSessionKeepalive();
         showLoginGate();
     }
     if (!response.ok) {
@@ -937,6 +944,52 @@ function applyAccount(user) {
         label.textContent = `${user.displayName || user.username}（${user.role === "admin" ? "管理员" : "账号"}）`;
     }
     byId("accountAdminBtn").classList.toggle("d-none", user.role !== "admin");
+    startSessionKeepalive();
+}
+
+function stopSessionKeepalive() {
+    if (sessionKeepaliveTimer) {
+        clearInterval(sessionKeepaliveTimer);
+        sessionKeepaliveTimer = null;
+    }
+}
+
+function startSessionKeepalive() {
+    stopSessionKeepalive();
+    if (!sessionStorage.getItem("boss_auth_token")) {
+        return;
+    }
+    sessionKeepaliveTimer = setInterval(() => {
+        keepSessionAlive();
+    }, SESSION_KEEPALIVE_MS);
+    if (!sessionVisibilityBound) {
+        sessionVisibilityBound = true;
+        document.addEventListener("visibilitychange", onSessionVisibility);
+    }
+}
+
+async function keepSessionAlive() {
+    if (!sessionStorage.getItem("boss_auth_token") || !state.account) {
+        stopSessionKeepalive();
+        return;
+    }
+    try {
+        const data = await requestJson("/api/auth/me");
+        if (data.user) {
+            state.account = data.user;
+        }
+    } catch (error) {
+        // 401 时 requestJson 已清 token 并弹登录；其它错误忽略，下次再试
+        if (!sessionStorage.getItem("boss_auth_token")) {
+            stopSessionKeepalive();
+        }
+    }
+}
+
+function onSessionVisibility() {
+    if (document.visibilityState === "visible" && state.account) {
+        keepSessionAlive();
+    }
 }
 
 async function restoreSession() {
@@ -1008,6 +1061,7 @@ function bindAccountEvents() {
         sessionStorage.removeItem("boss_auth_token");
         state.account = null;
         state.companies = [];
+        stopSessionKeepalive();
         renderCompanies();
         showLoginGate();
     });

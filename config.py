@@ -101,6 +101,7 @@ class AppConfig:
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
     # 0=开发兼容 Web 不强制鉴权；1=写接口与危险接口必须带 Token
     MINIAPP_AUTH_REQUIRED = os.getenv("MINIAPP_AUTH_REQUIRED", "0") == "1"
-    AUTH_SESSION_TTL_SECONDS = int(os.getenv("AUTH_SESSION_TTL_SECONDS", str(7 * 24 * 3600)))
+    # 会话最短 1 天；鉴权成功会滑动续期，页面闲置一天也不应被迫重登
+    AUTH_SESSION_TTL_SECONDS = max(24 * 3600, int(os.getenv("AUTH_SESSION_TTL_SECONDS", str(7 * 24 * 3600))))
     # 逗号分隔；* 表示允许任意来源（仅建议开发环境）
     CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
