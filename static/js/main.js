@@ -1255,6 +1255,8 @@ function bindAccountEvents() {
     byId("closeAccountAdminBtn").addEventListener("click", () => {
         byId("accountAdmin").classList.add("d-none");
     });
+    byId("cancelResetPasswordBtn").addEventListener("click", closeResetPasswordModal);
+    byId("confirmResetPasswordBtn").addEventListener("click", confirmResetPassword);
     byId("createAccountForm").addEventListener("submit", async (event) => {
         event.preventDefault();
         byId("accountAdminError").textContent = "";
@@ -1283,6 +1285,29 @@ async function loadAccounts() {
     (data.users || []).forEach((user) => {
         const row = document.createElement("tr");
         const action = document.createElement("td");
+        action.className = "account-actions";
+
+        const resetBtn = document.createElement("button");
+        resetBtn.type = "button";
+        resetBtn.className = "btn btn-sm btn-outline-primary";
+        resetBtn.textContent = "重置密码";
+        resetBtn.addEventListener("click", () => openResetPasswordModal(user));
+        action.appendChild(resetBtn);
+
+        const exportBtn = document.createElement("button");
+        exportBtn.type = "button";
+        exportBtn.className = "btn btn-sm btn-outline-success";
+        exportBtn.textContent = "导出备份";
+        exportBtn.addEventListener("click", () => exportAccountBackup(user));
+        action.appendChild(exportBtn);
+
+        const exportCsvBtn = document.createElement("button");
+        exportCsvBtn.type = "button";
+        exportCsvBtn.className = "btn btn-sm btn-outline-secondary";
+        exportCsvBtn.textContent = "导出CSV";
+        exportCsvBtn.addEventListener("click", () => exportAccountCsv(user));
+        action.appendChild(exportCsvBtn);
+
         if (!user.legacyStore) {
             const lockBtn = document.createElement("button");
             lockBtn.type = "button";
@@ -1308,8 +1333,12 @@ async function loadAccounts() {
             });
             action.append(lockBtn, deleteBtn);
         } else {
-            action.textContent = "默认管理员";
+            const tip = document.createElement("span");
+            tip.className = "muted-line";
+            tip.textContent = "默认管理员";
+            action.appendChild(tip);
         }
+
         row.innerHTML = `<td></td><td></td><td></td><td></td><td></td>`;
         row.children[0].textContent = user.username;
         row.children[1].textContent = user.displayName || "";
@@ -1318,4 +1347,114 @@ async function loadAccounts() {
         row.children[4].replaceWith(action);
         body.appendChild(row);
     });
+}
+
+let resetPasswordTarget = null;
+
+function openResetPasswordModal(user) {
+    resetPasswordTarget = user;
+    byId("resetPasswordTargetLabel").textContent = `${user.username}${user.displayName ? `（${user.displayName}）` : ""}`;
+    byId("resetPasswordInput").value = "";
+    byId("resetPasswordConfirmInput").value = "";
+    byId("resetPasswordError").textContent = "";
+    const modal = byId("resetPasswordModal");
+    modal.classList.remove("d-none");
+    modal.style.display = "flex";
+    byId("resetPasswordInput").focus();
+}
+
+function closeResetPasswordModal() {
+    const modal = byId("resetPasswordModal");
+    modal.style.display = "none";
+    modal.classList.add("d-none");
+    resetPasswordTarget = null;
+    byId("resetPasswordInput").value = "";
+    byId("resetPasswordConfirmInput").value = "";
+    byId("resetPasswordError").textContent = "";
+}
+
+async function confirmResetPassword() {
+    const error = byId("resetPasswordError");
+    if (!resetPasswordTarget) {
+        return;
+    }
+    const password = byId("resetPasswordInput").value;
+    const confirm = byId("resetPasswordConfirmInput").value;
+    error.textContent = "";
+    if (password.length < 2) {
+        error.textContent = "密码至少 2 个字符";
+        return;
+    }
+    if (password !== confirm) {
+        error.textContent = "两次输入的密码不一致";
+        return;
+    }
+    const btn = byId("confirmResetPasswordBtn");
+    btn.disabled = true;
+    try {
+        await requestJson(`/api/auth/users/${resetPasswordTarget.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ password }),
+        });
+        closeResetPasswordModal();
+        byId("accountAdminError").textContent = "";
+        showMessage("success", "密码已重置");
+        await loadAccounts();
+    } catch (err) {
+        error.textContent = err.message;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function exportAccountBackup(user) {
+    byId("accountAdminError").textContent = "";
+    try {
+        await downloadAuthedFile(
+            `/api/auth/users/${user.id}/export`,
+            `backup_${user.username || "account"}.json`
+        );
+        showMessage("success", `已导出账号「${user.username}」的备份`);
+    } catch (error) {
+        byId("accountAdminError").textContent = error.message;
+    }
+}
+
+async function exportAccountCsv(user) {
+    byId("accountAdminError").textContent = "";
+    try {
+        await downloadAuthedFile(
+            `/api/auth/users/${user.id}/export.csv`,
+            `${user.username || "account"}-companies.csv`
+        );
+        showMessage("success", `已导出账号「${user.username}」的 CSV`);
+    } catch (error) {
+        byId("accountAdminError").textContent = error.message;
+    }
+}
+
+async function downloadAuthedFile(path, fallbackName) {
+    const token = sessionStorage.getItem("boss_auth_token");
+    const response = await fetch(path, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || "下载失败");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const matched = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i);
+    let filename = fallbackName;
+    if (matched && matched[1]) {
+        filename = matched[1].replace(/['"]/g, "").trim() || fallbackName;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
 }

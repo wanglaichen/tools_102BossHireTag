@@ -801,3 +801,14 @@ select[multiple] {
     display: grid;
     grid-template-columns: 1.1fr 1fr 1fr 120px auto;
 }
+
+.account-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.account-actions .btn {
+    white-space: nowrap;
+}

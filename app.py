@@ -239,6 +239,46 @@ def auth_delete_user(user_id: str):
     return jsonify({"ok": True, "message": "账号已删除"})
 
 
+@app.route("/api/auth/users/<user_id>/export", methods=["GET"])
+def auth_export_user_backup(user_id: str):
+    """管理员导出指定账号的完整备份（含公司记录与自定义标签）。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    service = _service_for_account(target)
+    backup_dir = str(Path(AppConfig.DATA_DIR) / "backups" / str(target["id"]))
+    result = service.create_backup(
+        backup_dir,
+        app_version=AppConfig.APP_VERSION,
+        account=auth_service.public_user(target),
+    )
+    body = json.dumps(result["payload"], ensure_ascii=False, indent=2) + "\n"
+    return Response(
+        body,
+        mimetype="application/json; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={result['filename']}"},
+    )
+
+
+@app.route("/api/auth/users/<user_id>/export.csv", methods=["GET"])
+def auth_export_user_csv(user_id: str):
+    """管理员导出指定账号的公司 CSV（不含账号敏感字段）。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    service = _service_for_account(target)
+    body = service.export_csv()
+    username = str(target.get("username") or "account")
+    safe = "".join(ch for ch in username if ch.isalnum() or ch in "._-") or "account"
+    return Response(
+        body.encode("utf-8-sig"),
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={safe}-companies.csv"},
+    )
+
+
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown_server():
     """Gracefully stop the running Flask process.

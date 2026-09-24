@@ -322,6 +322,11 @@ class AuthService:
         if not is_admin and not is_self:
             raise AuthError("无权修改该用户", 403)
         if payload.get("password"):
+            # 参考 ChenLab：管理员可直接重置任意账号密码；本人仍建议走 change-password
+            if not is_admin and not is_self:
+                raise AuthError("无权修改该用户密码", 403)
+            if not is_admin and is_self:
+                raise AuthError("请使用修改密码接口并提供旧密码", 400)
             if len(str(payload["password"])) < 2:
                 raise ValueError("密码至少 2 个字符")
             target["passwordHash"] = self.hash_password(str(payload["password"]))
