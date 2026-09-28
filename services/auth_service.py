@@ -57,6 +57,10 @@ class AuthService:
     def _sessions_key(self) -> str:
         return f"{self.key_prefix}:auth:sessions"
 
+    def _mp_session_key(self, token: str) -> str:
+        """小程序登录会话：每个 token 独立 key + TTL，避免整桶 Hash 互相顶掉过期时间。"""
+        return f"{self.key_prefix}:auth:session:{token}"
+
     @property
     def client(self):
         if not self.redis_url or redis is None:
@@ -152,8 +156,16 @@ class AuthService:
             self._memory[token] = session
             return
         try:
-            client.hset(self._sessions_key, token, json.dumps(session, ensure_ascii=False))
-            client.expire(self._sessions_key, self.session_ttl_seconds)
+            client.set(
+                self._mp_session_key(token),
+                json.dumps(session, ensure_ascii=False),
+                ex=self.session_ttl_seconds,
+            )
+            # 清理旧整桶 Hash，避免再依赖整 key EXPIRE
+            try:
+                client.hdel(self._sessions_key, token)
+            except Exception:
+                pass
         except Exception:
             self._memory[token] = session
 
@@ -161,12 +173,27 @@ class AuthService:
         client = self.client
         if client is not None:
             try:
+                raw = client.get(self._mp_session_key(token))
+                if raw:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        try:
+                            client.expire(self._mp_session_key(token), self.session_ttl_seconds)
+                        except Exception:
+                            pass
+                        return data
+                # 兼容旧 Hash：…:auth:sessions
                 raw = client.hget(self._sessions_key, token)
                 if raw:
                     data = json.loads(raw)
                     if isinstance(data, dict):
                         try:
-                            client.expire(self._sessions_key, self.session_ttl_seconds)
+                            client.set(
+                                self._mp_session_key(token),
+                                json.dumps(data, ensure_ascii=False),
+                                ex=self.session_ttl_seconds,
+                            )
+                            client.hdel(self._sessions_key, token)
                         except Exception:
                             pass
                         return data

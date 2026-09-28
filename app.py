@@ -7,6 +7,8 @@ from werkzeug.exceptions import HTTPException
 
 from config import AppConfig
 from services.auth_service import AuthError, AuthService
+from services.blacklist_service import BlacklistService
+from services.channel_service import ChannelService
 from services.company_service import CompanyService
 from services.storage import RedisProxyStore, RedisSettingsStore, StorageUnavailable, create_storage
 
@@ -27,11 +29,22 @@ auth_service = AuthService(
     admin_password=AppConfig.ADMIN_PASSWORD,
 )
 _account_services: dict[str, CompanyService] = {}
+_blacklist_services: dict[str, BlacklistService] = {}
+channel_service = ChannelService(
+    AppConfig.REDIS_URL,
+    AppConfig.REDIS_CHANNELS_KEY,
+    AppConfig.REDIS_TIMEOUT_SECONDS,
+)
 
 try:
     auth_service.ensure_default_admin()
 except Exception as exc:
     app.logger.warning("默认管理员初始化失败: %s", exc)
+
+try:
+    channel_service.ensure_defaults()
+except Exception as exc:
+    app.logger.warning("默认招聘渠道初始化失败: %s", exc)
 
 
 def _service_for_account(user: dict) -> CompanyService:
@@ -58,11 +71,39 @@ def _service_for_account(user: dict) -> CompanyService:
     return service
 
 
+def _blacklist_for_account(user: dict) -> BlacklistService:
+    user_id = str(user["id"])
+    cached = _blacklist_services.get(user_id)
+    if cached is not None:
+        return cached
+    legacy = bool(user.get("legacyStore"))
+    base = AppConfig.REDIS_KEY_PREFIX if legacy else f"{AppConfig.REDIS_KEY_PREFIX}:user:{user_id}"
+    prefix = f"{base}:blacklist"
+    storage_file = (
+        str(Path(AppConfig.DATA_DIR) / "blacklist.json")
+        if legacy
+        else str(Path(AppConfig.DATA_DIR) / "users" / user_id / "blacklist.json")
+    )
+    config = dict(AppConfig.__dict__)
+    config["REDIS_KEY_PREFIX"] = prefix
+    config["STORAGE_FILE"] = storage_file
+    service = BlacklistService(create_storage(config, data_hash_name="items"))
+    _blacklist_services[user_id] = service
+    return service
+
+
 def _cs() -> CompanyService:
     user = getattr(g, "account", None)
     if not user:
         raise AuthError("未登录")
     return _service_for_account(user)
+
+
+def _bls() -> BlacklistService:
+    user = getattr(g, "account", None)
+    if not user:
+        raise AuthError("未登录")
+    return _blacklist_for_account(user)
 
 
 def _export_filename(ext: str) -> str:
@@ -236,6 +277,7 @@ def auth_update_user(user_id: str):
 def auth_delete_user(user_id: str):
     auth_service.delete_user(g.account, user_id)
     _account_services.pop(user_id, None)
+    _blacklist_services.pop(user_id, None)
     return jsonify({"ok": True, "message": "账号已删除"})
 
 
@@ -263,7 +305,7 @@ def auth_export_user_backup(user_id: str):
 
 @app.route("/api/auth/users/<user_id>/export.csv", methods=["GET"])
 def auth_export_user_csv(user_id: str):
-    """管理员导出指定账号的公司 CSV（不含账号敏感字段）。"""
+    """管理员导出指定账号的登记公司 CSV（不含账号敏感字段）。"""
     _require_admin()
     target = auth_service.read_user(user_id)
     if not target:
@@ -275,7 +317,192 @@ def auth_export_user_csv(user_id: str):
     return Response(
         body.encode("utf-8-sig"),
         mimetype="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename={safe}-companies.csv"},
+        headers={"Content-Disposition": f"attachment; filename={safe}-hire-companies.csv"},
+    )
+
+
+@app.route("/api/auth/users/<user_id>/import", methods=["POST"])
+def auth_import_user_backup(user_id: str):
+    """管理员向指定账号合并导入登记备份/文本。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    payload = request.get_json(silent=True) or {}
+    service = _service_for_account(target)
+    result = service.import_rows(payload.get("text", ""), overwrite=False, channel=payload.get("channel"))
+    return jsonify(
+        {
+            "message": f"已导入登记数据到账号「{target.get('username')}」：新增 {result['imported_count']}，更新 {result['updated_count']}，跳过 {result['skipped_count']}",
+            **result,
+        }
+    )
+
+
+@app.route("/api/auth/users/<user_id>/import-overwrite", methods=["POST"])
+def auth_import_user_overwrite(user_id: str):
+    """管理员向指定账号覆盖导入登记备份/文本。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    payload = request.get_json(silent=True) or {}
+    service = _service_for_account(target)
+    result = service.import_rows(payload.get("text", ""), overwrite=True, channel=payload.get("channel"))
+    count = result.get("imported_count", 0) + result.get("updated_count", 0)
+    return jsonify({"message": f"已覆盖导入登记数据到账号「{target.get('username')}」：{count} 条", **result})
+
+
+@app.route("/api/auth/users/<user_id>/blacklist/export", methods=["GET"])
+def auth_export_user_blacklist(user_id: str):
+    """管理员导出指定账号的黑名单备份。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    service = _blacklist_for_account(target)
+    result = service.export_backup(account=auth_service.public_user(target))
+    body = json.dumps(result["payload"], ensure_ascii=False, indent=2) + "\n"
+    return Response(
+        body,
+        mimetype="application/json; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={result['filename']}"},
+    )
+
+
+@app.route("/api/auth/users/<user_id>/blacklist/export.csv", methods=["GET"])
+def auth_export_user_blacklist_csv(user_id: str):
+    """管理员导出指定账号的黑名单 CSV。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    service = _blacklist_for_account(target)
+    body = service.export_csv()
+    username = str(target.get("username") or "account")
+    safe = "".join(ch for ch in username if ch.isalnum() or ch in "._-") or "account"
+    return Response(
+        body.encode("utf-8-sig"),
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={safe}-blacklist.csv"},
+    )
+
+
+@app.route("/api/auth/users/<user_id>/blacklist/import", methods=["POST"])
+def auth_import_user_blacklist(user_id: str):
+    """管理员向指定账号合并导入黑名单。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    payload = request.get_json(silent=True) or {}
+    service = _blacklist_for_account(target)
+    result = service.import_backup(payload.get("text", ""), overwrite=False)
+    return jsonify(
+        {
+            "message": f"已导入黑名单到账号「{target.get('username')}」：新增 {result['imported_count']}，更新 {result['updated_count']}",
+            **result,
+        }
+    )
+
+
+@app.route("/api/auth/users/<user_id>/blacklist/import-overwrite", methods=["POST"])
+def auth_import_user_blacklist_overwrite(user_id: str):
+    """管理员向指定账号覆盖导入黑名单。"""
+    _require_admin()
+    target = auth_service.read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    payload = request.get_json(silent=True) or {}
+    service = _blacklist_for_account(target)
+    result = service.import_backup(payload.get("text", ""), overwrite=True)
+    return jsonify(
+        {
+            "message": f"已覆盖导入黑名单到账号「{target.get('username')}」：{result['imported_count']} 条",
+            **result,
+        }
+    )
+
+
+@app.route("/api/channels", methods=["GET"])
+def list_channels():
+    return jsonify({"items": channel_service.list_channels()})
+
+
+@app.route("/api/channels", methods=["POST"])
+def create_channel():
+    _require_admin()
+    payload = request.get_json(silent=True) or {}
+    try:
+        item = channel_service.create_channel(name=payload.get("name", ""), channel_id=payload.get("id"))
+    except ValueError as error:
+        status = 409 if "已存在" in str(error) else 400
+        return jsonify({"message": str(error)}), status
+    return jsonify({"item": item, "message": "渠道已添加", "items": channel_service.list_channels()}), 201
+
+
+@app.route("/api/channels/<channel_id>", methods=["DELETE"])
+def delete_channel(channel_id: str):
+    """删除渠道页签；各账号公司数据一律保留为残留数据。"""
+    _require_admin()
+    residual = 0
+    for user in auth_service.list_users():
+        full = auth_service.read_user(user["id"])
+        if not full:
+            continue
+        counts = _service_for_account(full).count_by_channel()
+        residual += int(counts.get(channel_id, 0) or 0)
+    try:
+        result = channel_service.delete_channel(channel_id)
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+    result["residual_count"] = residual
+    if residual:
+        result["message"] = f"渠道页签已移除；已有 {residual} 条公司数据保留未删"
+    return jsonify({**result, "items": channel_service.list_channels()})
+
+
+@app.route("/api/admin/summary", methods=["GET"])
+def admin_summary():
+    _require_admin()
+    channels = channel_service.list_channels()
+    users_out = []
+    total_companies = 0
+    channel_totals: dict[str, int] = {item["id"]: 0 for item in channels}
+    for user in auth_service.list_users():
+        full = auth_service.read_user(user["id"])
+        if not full:
+            continue
+        service = _service_for_account(full)
+        by_channel = service.count_by_channel()
+        company_count = sum(by_channel.values())
+        total_companies += company_count
+        for cid, count in by_channel.items():
+            channel_totals[cid] = channel_totals.get(cid, 0) + int(count)
+        bl_count = 0
+        try:
+            bl_count = len(_blacklist_for_account(full).list_items())
+        except Exception:
+            bl_count = 0
+        users_out.append(
+            {
+                **user,
+                "company_count": company_count,
+                "blacklist_count": bl_count,
+                "by_channel": by_channel,
+            }
+        )
+    return jsonify(
+        {
+            "channels": channels,
+            "users": users_out,
+            "totals": {
+                "user_count": len(users_out),
+                "company_count": total_companies,
+                "channel_count": len(channels),
+                "by_channel": channel_totals,
+            },
+        }
     )
 
 
@@ -308,7 +535,8 @@ def index():
 
 @app.route("/api/summary", methods=["GET"])
 def summary():
-    return jsonify(_cs().get_summary())
+    channel = request.args.get("channel")
+    return jsonify(_cs().get_summary(channel=channel))
 
 
 def _proxy_store():
@@ -328,28 +556,32 @@ def get_settings():
 def update_settings():
     payload = request.get_json(silent=True) or {}
     next_settings = _cs().update_settings(payload)
+    channel = request.args.get("channel") or payload.get("channel")
     return jsonify({
         "message": "配置已保存",
         "settings": next_settings,
-        "summary": _cs().get_summary(),
+        "summary": _cs().get_summary(channel=channel),
     })
 
 
 @app.route("/api/companies", methods=["GET"])
 def list_companies():
     time_filter = request.args.get("time_filter", "all")
-    return jsonify({"items": _cs().list_companies(time_filter=time_filter)})
+    channel = request.args.get("channel")
+    return jsonify({"items": _cs().list_companies(time_filter=time_filter, channel=channel)})
 
 
 @app.route("/api/companies", methods=["POST"])
 def create_company():
     payload = request.get_json(silent=True) or {}
+    if not payload.get("channel"):
+        payload["channel"] = request.args.get("channel") or "boss"
     item = _cs().create_company(payload)
     return jsonify(
         {
             "message": "记录已新增",
             "item": item,
-            "summary": _cs().get_summary(),
+            "summary": _cs().get_summary(channel=item.get("channel")),
         }
     )
 
@@ -357,7 +589,7 @@ def create_company():
 @app.route("/api/companies/import", methods=["POST"])
 def import_companies():
     payload = request.get_json(silent=True) or {}
-    result = _cs().import_rows(payload.get("text", ""))
+    result = _cs().import_rows(payload.get("text", ""), channel=payload.get("channel"))
     return jsonify(
         {
             "message": f"导入 {result['imported_count']} 条，更新 {result['updated_count']} 条，跳过 {result['skipped_count']} 条",
@@ -369,7 +601,7 @@ def import_companies():
 @app.route("/api/companies/import-overwrite", methods=["POST"])
 def import_companies_overwrite():
     payload = request.get_json(silent=True) or {}
-    result = _cs().import_rows(payload.get("text", ""), overwrite=True)
+    result = _cs().import_rows(payload.get("text", ""), overwrite=True, channel=payload.get("channel"))
     count = result.get("imported_count", 0) + result.get("updated_count", 0)
     return jsonify(
         {
@@ -476,19 +708,20 @@ def update_company(company_id: str):
         {
             "message": "记录已更新",
             "item": item,
-            "summary": _cs().get_summary(),
+            "summary": _cs().get_summary(channel=item.get("channel")),
         }
     )
 
 
 @app.route("/api/companies/<company_id>", methods=["DELETE"])
 def delete_company(company_id: str):
+    channel = request.args.get("channel")
     result = _cs().delete_company(company_id)
     return jsonify(
         {
             "message": "记录已删除",
             **result,
-            "summary": _cs().get_summary(),
+            "summary": _cs().get_summary(channel=channel),
         }
     )
 
@@ -505,6 +738,56 @@ def _proxy_store():
         AppConfig.REDIS_PROXY_KEY,
         AppConfig.REDIS_TIMEOUT_SECONDS,
     )
+
+
+@app.route("/api/blacklist", methods=["GET"])
+def list_blacklist():
+    keyword = request.args.get("q", "")
+    channel = request.args.get("channel")
+    return jsonify({
+        "items": _bls().list_items(keyword=keyword, channel=channel),
+        "summary": _bls().get_summary(channel=channel),
+    })
+
+
+@app.route("/api/blacklist", methods=["POST"])
+def create_blacklist_item():
+    payload = request.get_json(silent=True) or {}
+    if not payload.get("channel"):
+        payload["channel"] = request.args.get("channel") or "boss"
+    item = _bls().create_item(payload)
+    channel = item.get("channel")
+    return jsonify({
+        "message": "已加入黑名单",
+        "item": item,
+        "summary": _bls().get_summary(channel=channel),
+        "items": _bls().list_items(channel=channel),
+    }), 201
+
+
+@app.route("/api/blacklist/<item_id>", methods=["PATCH"])
+def update_blacklist_item(item_id: str):
+    payload = request.get_json(silent=True) or {}
+    item = _bls().update_item(item_id, payload)
+    channel = item.get("channel") or request.args.get("channel")
+    return jsonify({
+        "message": "黑名单已更新",
+        "item": item,
+        "summary": _bls().get_summary(channel=channel),
+        "items": _bls().list_items(channel=channel),
+    })
+
+
+@app.route("/api/blacklist/<item_id>", methods=["DELETE"])
+def delete_blacklist_item(item_id: str):
+    channel = request.args.get("channel")
+    result = _bls().delete_item(item_id)
+    return jsonify({
+        "message": "已移出黑名单",
+        **result,
+        "summary": _bls().get_summary(channel=channel),
+        "items": _bls().list_items(channel=channel),
+    })
 
 
 @app.route("/api/proxy", methods=["GET"])

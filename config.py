@@ -81,7 +81,7 @@ DATA_PATH = resolve_data_path()
 
 
 class AppConfig:
-    APP_VERSION = os.getenv("APP_VERSION", "v1.0.44")
+    APP_VERSION = os.getenv("APP_VERSION", "v1.0.58")
     SECRET_KEY = os.getenv("SECRET_KEY", "tools102-boss-hire-tag-dev")
     APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
     APP_PORT = int(os.getenv("APP_PORT", os.getenv("PORT", "9212")))
@@ -92,7 +92,8 @@ class AppConfig:
     REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "jjob:tools102-boss-hire-tag:state")
     REDIS_PROXY_KEY = os.getenv("REDIS_PROXY_KEY", "jjob:tools102-boss-hire-tag:proxy")
     REDIS_SETTINGS_KEY = os.getenv("REDIS_SETTINGS_KEY", "jjob:tools102-boss-hire-tag:settings")
-    REDIS_TIMEOUT_SECONDS = float(os.getenv("REDIS_TIMEOUT_SECONDS", "5"))
+    REDIS_CHANNELS_KEY = os.getenv("REDIS_CHANNELS_KEY", "jjob:tools102-boss-hire-tag:channels")
+    REDIS_TIMEOUT_SECONDS = float(os.getenv("REDIS_TIMEOUT_SECONDS", "15"))
     APP_PROXY_URL = os.getenv("APP_PROXY_URL", "")
     WECHAT_APPID = os.getenv("WECHAT_APPID", "")
     WECHAT_SECRET = os.getenv("WECHAT_SECRET", "")
@@ -101,7 +102,7 @@ class AppConfig:
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
     # 0=开发兼容 Web 不强制鉴权；1=写接口与危险接口必须带 Token
     MINIAPP_AUTH_REQUIRED = os.getenv("MINIAPP_AUTH_REQUIRED", "0") == "1"
-    # 会话最短 1 天；鉴权成功会滑动续期，页面闲置一天也不应被迫重登
-    AUTH_SESSION_TTL_SECONDS = max(24 * 3600, int(os.getenv("AUTH_SESSION_TTL_SECONDS", str(7 * 24 * 3600))))
+    # 会话默认 365 天；有业务请求时会滑动续期。不做前端定时鉴权探活。
+    AUTH_SESSION_TTL_SECONDS = max(24 * 3600, int(os.getenv("AUTH_SESSION_TTL_SECONDS", str(365 * 24 * 3600))))
     # 逗号分隔；* 表示允许任意来源（仅建议开发环境）
     CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")

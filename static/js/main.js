@@ -9,12 +9,53 @@ const state = {
     timeFilter: "all",
     selectedStatuses: [],
     account: null,
+    feature: "hire",
+    hireChannel: "boss",
+    channels: [],
+    adminTab: "summary",
+    adminImportTarget: null,
+    adminImportMode: "merge",
+    adminImportKind: "hire",
+    blacklist: [],
+    blacklistEditingId: null,
+    page: 1,
+    pageSize: 30,
 };
 
-// 页面闲置时定时续期会话，保证开着一天不刷新也不掉登录
-const SESSION_KEEPALIVE_MS = 30 * 60 * 1000;
-let sessionKeepaliveTimer = null;
-let sessionVisibilityBound = false;
+function channelQuery(extra = "") {
+    const channel = encodeURIComponent(state.hireChannel || "boss");
+    const base = `channel=${channel}`;
+    return extra ? `${extra}&${base}` : `?${base}`;
+}
+
+function currentChannelLabel() {
+    const hit = (state.channels || []).find((item) => item.id === state.hireChannel);
+    return hit ? hit.name : (state.hireChannel || "boss");
+}
+
+function updateChannelPageTitle() {
+    const label = currentChannelLabel();
+    const hireTitle = byId("hirePageTitle");
+    const blacklistTitle = byId("blacklistPageTitle");
+    if (hireTitle) hireTitle.textContent = label;
+    if (blacklistTitle) blacklistTitle.textContent = label;
+}
+
+const AUTH_TOKEN_KEY = "boss_auth_token";
+
+function getAuthToken() {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || sessionStorage.getItem(AUTH_TOKEN_KEY) || "";
+}
+
+function setAuthToken(token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+}
+
+function clearAuthToken() {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+}
 
 function byId(id) {
     return document.getElementById(id);
@@ -41,7 +82,7 @@ async function requestJson(url, options = {}) {
         "Content-Type": "application/json",
         ...(options.headers || {}),
     };
-    const token = sessionStorage.getItem("boss_auth_token");
+    const token = getAuthToken();
     if (token) {
         headers.Authorization = `Bearer ${token}`;
     }
@@ -50,10 +91,10 @@ async function requestJson(url, options = {}) {
         headers,
     });
     const data = await response.json().catch(() => ({}));
-    if (response.status === 401) {
-        sessionStorage.removeItem("boss_auth_token");
+    // 仅在明确未登录/Token 无效时退出；不做定时鉴权探活
+    if (response.status === 401 && !String(url).includes("/api/auth/login") && !String(url).includes("/api/auth/register")) {
+        clearAuthToken();
         state.account = null;
-        stopSessionKeepalive();
         showLoginGate();
     }
     if (!response.ok) {
@@ -75,6 +116,7 @@ function readForm() {
         is_outsourced: byId("outsourcedInput").value,
         is_interviewed: byId("interviewedInput").value,
         note: byId("noteInput").value,
+        channel: state.hireChannel || "boss",
     };
 }
 
@@ -281,6 +323,7 @@ function updateStatusFilterUI() {
     allLabel.querySelector("input").addEventListener("change", () => {
         state.selectedStatuses = [];
         updateStatusFilterUI();
+        resetCompanyPage();
         renderCompanies();
     });
     menu.appendChild(allLabel);
@@ -297,6 +340,7 @@ function updateStatusFilterUI() {
             const allCheckbox = menu.querySelector('input[value=""]');
             if (allCheckbox) allCheckbox.checked = state.selectedStatuses.length === 0;
             updateStatusFilterUI();
+            resetCompanyPage();
             renderCompanies();
         });
         menu.appendChild(label);
@@ -362,14 +406,27 @@ function getFilteredCompanies() {
 function renderCompanies() {
     const tbody = byId("companyTableBody");
     const items = getFilteredCompanies();
-    tbody.innerHTML = "";
+    const pageSize = Number(state.pageSize) || 30;
+    const total = items.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize) || 1);
+    if (state.page > totalPages) {
+        state.page = totalPages;
+    }
+    if (state.page < 1) {
+        state.page = 1;
+    }
+    const start = (state.page - 1) * pageSize;
+    const pageItems = items.slice(start, start + pageSize);
 
-    if (!items.length) {
+    tbody.innerHTML = "";
+    renderCompanyPager(total, totalPages, start, pageItems.length);
+
+    if (!total) {
         tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">暂无匹配记录</td></tr>';
         return;
     }
 
-    items.forEach((item) => {
+    pageItems.forEach((item) => {
         const tr = document.createElement("tr");
         const statusParts = (item.effect_status || "未填写").split(",");
         const industryParts = (item.industry || "-").split(",");
@@ -419,6 +476,64 @@ function renderCompanies() {
             fillForm(item);
         });
         tbody.appendChild(tr);
+    });
+}
+
+function renderCompanyPager(total, totalPages, start, pageCount) {
+    const info = byId("pagerInfo");
+    const pageLabel = byId("pagerPageLabel");
+    const prevBtn = byId("pagerPrevBtn");
+    const nextBtn = byId("pagerNextBtn");
+    if (!info || !pageLabel || !prevBtn || !nextBtn) {
+        return;
+    }
+    if (!total) {
+        info.textContent = "共 0 条";
+        pageLabel.textContent = "1 / 1";
+    } else {
+        const from = start + 1;
+        const to = start + pageCount;
+        info.textContent = `共 ${total} 条，当前 ${from}-${to}`;
+        pageLabel.textContent = `${state.page} / ${totalPages}`;
+    }
+    prevBtn.disabled = state.page <= 1;
+    nextBtn.disabled = state.page >= totalPages;
+    document.querySelectorAll(".pager-size-btn").forEach((btn) => {
+        btn.classList.toggle("active", Number(btn.dataset.size) === Number(state.pageSize));
+    });
+}
+
+function resetCompanyPage() {
+    state.page = 1;
+}
+
+function bindCompanyPager() {
+    const prevBtn = byId("pagerPrevBtn");
+    const nextBtn = byId("pagerNextBtn");
+    if (prevBtn) {
+        prevBtn.addEventListener("click", () => {
+            if (state.page > 1) {
+                state.page -= 1;
+                renderCompanies();
+            }
+        });
+    }
+    if (nextBtn) {
+        nextBtn.addEventListener("click", () => {
+            state.page += 1;
+            renderCompanies();
+        });
+    }
+    document.querySelectorAll(".pager-size-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const size = Number(btn.dataset.size) || 30;
+            if (size === state.pageSize) {
+                return;
+            }
+            state.pageSize = size;
+            state.page = 1;
+            renderCompanies();
+        });
     });
 }
 
@@ -501,12 +616,13 @@ async function removeIndustryOption(value) {
 }
 
 async function loadSummary() {
-    renderSummary(await requestJson("/api/summary"));
+    renderSummary(await requestJson(`/api/summary${channelQuery()}`));
 }
 
 async function loadCompanies() {
-    const data = await requestJson("/api/companies?time_filter=" + state.timeFilter);
+    const data = await requestJson(`/api/companies?time_filter=${encodeURIComponent(state.timeFilter)}&channel=${encodeURIComponent(state.hireChannel || "boss")}`);
     state.companies = data.items || [];
+    resetCompanyPage();
     renderCompanies();
 }
 
@@ -542,7 +658,7 @@ async function deleteCompany(item) {
 
     clearMessages();
     try {
-        const result = await requestJson(`/api/companies/${item.id}`, { method: "DELETE" });
+        const result = await requestJson(`/api/companies/${item.id}?channel=${encodeURIComponent(state.hireChannel || "boss")}`, { method: "DELETE" });
         showMessage("success", result.message || "已删除");
         if (state.editingId === item.id) {
             resetForm();
@@ -561,7 +677,7 @@ async function importCompanies() {
     try {
         const result = await requestJson("/api/companies/import", {
             method: "POST",
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ text, channel: state.hireChannel || "boss" }),
         });
         byId("bulkImportInput").value = "";
         showMessage("success", result.message || "导入完成");
@@ -595,7 +711,7 @@ async function handleImportFile(event) {
         try {
             const result = await requestJson(endpoint, {
                 method: "POST",
-                body: JSON.stringify({ text }),
+                body: JSON.stringify({ text, channel: state.hireChannel || "boss" }),
             });
             showMessage("success", result.message);
             renderSummary(result.summary || {});
@@ -904,6 +1020,7 @@ async function loadVersion() {
 
 async function boot() {
     bindAccountEvents();
+    bindFeatureTabs();
     const user = await restoreSession();
     if (!user) {
         showLoginGate();
@@ -914,7 +1031,148 @@ async function boot() {
     await openWorkspace();
 }
 
+function bindFeatureTabs() {
+    document.querySelectorAll(".feature-tab").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const feature = btn.dataset.feature || "hire";
+            const group = btn.closest(".feature-group");
+            // 已选中时再点：只手动展开/收起，不联动关掉其他分组
+            if (state.feature === feature) {
+                group?.classList.toggle("is-open");
+                return;
+            }
+            switchFeature(feature);
+        });
+    });
+}
+
+function bindChannelSubtabs() {
+    document.querySelectorAll(".feature-subtab").forEach((btn) => {
+        btn.onclick = (event) => {
+            event.stopPropagation();
+            const channel = btn.dataset.channel || "boss";
+            const group = btn.closest(".feature-group");
+            const feature = (group && group.dataset.featureGroup) || state.feature || "hire";
+            if (state.feature !== feature) {
+                switchFeature(feature, channel);
+            } else {
+                switchHireChannel(channel);
+            }
+        };
+    });
+}
+
+async function loadChannels() {
+    const data = await requestJson("/api/channels");
+    state.channels = data.items || [];
+    if (!state.channels.length) {
+        state.channels = [{ id: "boss", name: "boss" }];
+    }
+    if (!state.channels.some((item) => item.id === state.hireChannel)) {
+        state.hireChannel = state.channels[0].id;
+    }
+    renderChannelTabs();
+}
+
+function renderChannelTabs() {
+    ["hireSubrail", "blacklistSubrail"].forEach((railId) => {
+        const rail = byId(railId);
+        if (!rail) return;
+        rail.replaceChildren();
+        state.channels.forEach((item) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "feature-subtab";
+            btn.dataset.channel = item.id;
+            btn.setAttribute("role", "tab");
+            btn.setAttribute("aria-selected", "false");
+            btn.textContent = item.name || item.id;
+            rail.appendChild(btn);
+        });
+    });
+    bindChannelSubtabs();
+    syncChannelSubtabActive();
+    updateChannelPageTitle();
+    const workspace = byId("hireChannelWorkspace");
+    if (workspace) {
+        workspace.dataset.channel = state.hireChannel || "boss";
+        workspace.hidden = false;
+        workspace.classList.add("is-active");
+    }
+}
+
+/** 只有当前大页面下的渠道子页签显示选中；其他大页面展开时渠道不带 active。 */
+function syncChannelSubtabActive() {
+    const channel = state.hireChannel || "boss";
+    document.querySelectorAll(".feature-group").forEach((group) => {
+        const inActiveFeature = group.dataset.featureGroup === state.feature;
+        group.querySelectorAll(".feature-subtab").forEach((btn) => {
+            const active = inActiveFeature && btn.dataset.channel === channel;
+            btn.classList.toggle("active", active);
+            btn.setAttribute("aria-selected", active ? "true" : "false");
+        });
+    });
+}
+
+function switchFeature(feature, channel) {
+    state.feature = feature === "blacklist" ? "blacklist" : "hire";
+    document.querySelectorAll(".feature-tab").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.feature === state.feature);
+    });
+    // 点开哪个就保持哪个展开；切换功能页时不自动收起其他分组
+    document.querySelectorAll(".feature-group").forEach((group) => {
+        if (group.dataset.featureGroup === state.feature) {
+            group.classList.add("is-open");
+        }
+    });
+    document.querySelectorAll(".feature-panel").forEach((panel) => {
+        const active = panel.dataset.feature === state.feature;
+        panel.classList.toggle("is-active", active);
+        panel.hidden = !active;
+    });
+    // 点大页：默认选中该页下第一个渠道；点具体子页签时传入 channel 则沿用
+    const firstChannel = (state.channels[0] && state.channels[0].id) || "boss";
+    const nextChannel = channel || firstChannel;
+    if (state.feature === "blacklist") {
+        switchHireChannel(nextChannel, { reloadHire: false });
+        loadBlacklist().catch((error) => showMessage("error", error.message));
+        return;
+    }
+    switchHireChannel(nextChannel);
+}
+
+function switchHireChannel(channel, options = {}) {
+    const reloadHire = options.reloadHire !== false;
+    const ids = (state.channels || []).map((item) => item.id);
+    const next = ids.includes(channel) ? channel : (ids[0] || "boss");
+    const changed = state.hireChannel !== next;
+    state.hireChannel = next;
+
+    syncChannelSubtabActive();
+    updateChannelPageTitle();
+
+    const workspace = byId("hireChannelWorkspace");
+    if (workspace) {
+        workspace.dataset.channel = next;
+        workspace.hidden = false;
+        workspace.classList.add("is-active");
+    }
+
+    if (state.feature === "blacklist") {
+        if (changed || options.forceReload) {
+            loadBlacklist().catch((error) => showMessage("error", error.message));
+        }
+        return;
+    }
+
+    if (reloadHire && (changed || !state.companies.length || options.forceReload)) {
+        loadSummary().catch((error) => showMessage("error", error.message));
+        loadCompanies().catch((error) => showMessage("error", error.message));
+    }
+}
+
 let workspaceReady = false;
+let blacklistReady = false;
 
 async function openWorkspace() {
     if (!workspaceReady) {
@@ -935,9 +1193,19 @@ async function openWorkspace() {
 
         byId("addStatusButton").addEventListener("click", addStatusOption);
         byId("addIndustryButton").addEventListener("click", addIndustryOption);
-        byId("searchInput").addEventListener("input", renderCompanies);
+        byId("searchInput").addEventListener("input", () => {
+            resetCompanyPage();
+            renderCompanies();
+        });
         byId("statusFilterBtn").addEventListener("click", toggleStatusFilterMenu);
-        byId("hunterFilter").addEventListener("change", renderCompanies);
+        byId("hunterFilter").addEventListener("change", () => {
+            resetCompanyPage();
+            renderCompanies();
+        });
+        byId("outsourcedFilter").addEventListener("change", () => {
+            resetCompanyPage();
+            renderCompanies();
+        });
         byId("saveProxyBtn").addEventListener("click", saveProxy);
         byId("proxyEnableCheck").addEventListener("change", toggleProxyInput);
         byId("refreshCompaniesBtn").addEventListener("click", refreshCompanies);
@@ -953,13 +1221,147 @@ async function openWorkspace() {
         setupWorkspaceResize();
         setupTableDragResize();
         setupColumnHintTips();
+        bindCompanyPager();
+        bindBlacklistEvents();
     }
     state.companies = [];
     try {
         await loadVersion();
+        await loadChannels();
         await loadProxySettings();
         await loadSummary();
         await loadCompanies();
+        if (state.feature === "blacklist") {
+            await loadBlacklist();
+        }
+    } catch (error) {
+        showMessage("error", error.message);
+    }
+}
+
+function bindBlacklistEvents() {
+    if (blacklistReady) return;
+    blacklistReady = true;
+    byId("blacklistForm").addEventListener("submit", submitBlacklist);
+    byId("blacklistCancelBtn").addEventListener("click", resetBlacklistForm);
+    byId("blacklistSearchBtn").addEventListener("click", () => loadBlacklist());
+    byId("blacklistRefreshBtn").addEventListener("click", () => {
+        byId("blacklistSearchInput").value = "";
+        loadBlacklist();
+    });
+    byId("blacklistSearchInput").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            loadBlacklist();
+        }
+    });
+}
+
+async function loadBlacklist() {
+    const q = byId("blacklistSearchInput").value.trim();
+    const channel = encodeURIComponent(state.hireChannel || "boss");
+    const data = await requestJson(`/api/blacklist?q=${encodeURIComponent(q)}&channel=${channel}`);
+    state.blacklist = data.items || [];
+    renderBlacklistSummary(data.summary || {});
+    renderBlacklist();
+}
+
+function renderBlacklistSummary(summary) {
+    byId("blacklistCount").textContent = summary.blacklist_count ?? state.blacklist.length;
+    byId("blacklistLastUpdated").textContent = formatTime(summary.last_updated_at) || "-";
+}
+
+function renderBlacklist() {
+    const tbody = byId("blacklistTableBody");
+    tbody.replaceChildren();
+    if (!state.blacklist.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-cell">暂无匹配的黑名单记录</td></tr>';
+        return;
+    }
+    state.blacklist.forEach((item) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td><div class="company-name">${escapeHtml(item.company_name)}</div></td>
+            <td>${formatTimeHtml(item.updated_at)}</td>
+            <td>
+                <div class="row-actions">
+                    <button class="btn btn-sm btn-outline-primary" data-action="edit">编辑</button>
+                    <button class="btn btn-sm btn-outline-danger" data-action="delete">移出</button>
+                </div>
+            </td>
+            <td class="note-cell">${escapeHtml(item.reason || "")}</td>
+        `;
+        tr.querySelector('[data-action="edit"]').addEventListener("click", () => fillBlacklistForm(item));
+        tr.querySelector('[data-action="delete"]').addEventListener("click", () => deleteBlacklistItem(item));
+        tbody.appendChild(tr);
+    });
+}
+
+function fillBlacklistForm(item) {
+    state.blacklistEditingId = item.id;
+    byId("blacklistNameInput").value = item.company_name || "";
+    byId("blacklistReasonInput").value = item.reason || "";
+    byId("blacklistSubmitBtn").textContent = "保存修改";
+    byId("blacklistCancelBtn").classList.remove("d-none");
+    byId("blacklistNameInput").focus();
+}
+
+function resetBlacklistForm() {
+    state.blacklistEditingId = null;
+    byId("blacklistForm").reset();
+    byId("blacklistSubmitBtn").textContent = "加入黑名单";
+    byId("blacklistCancelBtn").classList.add("d-none");
+}
+
+async function submitBlacklist(event) {
+    event.preventDefault();
+    clearMessages();
+    const payload = {
+        company_name: byId("blacklistNameInput").value.trim(),
+        reason: byId("blacklistReasonInput").value.trim(),
+        channel: state.hireChannel || "boss",
+    };
+    byId("blacklistSubmitBtn").disabled = true;
+    try {
+        let result;
+        if (state.blacklistEditingId) {
+            result = await requestJson(`/api/blacklist/${state.blacklistEditingId}`, {
+                method: "PATCH",
+                body: JSON.stringify(payload),
+            });
+        } else {
+            result = await requestJson("/api/blacklist", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            });
+        }
+        showMessage("success", result.message || "已保存");
+        resetBlacklistForm();
+        state.blacklist = result.items || [];
+        renderBlacklistSummary(result.summary || {});
+        renderBlacklist();
+    } catch (error) {
+        showMessage("error", error.message);
+    } finally {
+        byId("blacklistSubmitBtn").disabled = false;
+    }
+}
+
+async function deleteBlacklistItem(item) {
+    if (!window.confirm(`确定将「${item.company_name}」移出黑名单吗？`)) {
+        return;
+    }
+    clearMessages();
+    try {
+        const channel = encodeURIComponent(state.hireChannel || "boss");
+        const result = await requestJson(`/api/blacklist/${item.id}?channel=${channel}`, { method: "DELETE" });
+        showMessage("success", result.message || "已移出");
+        if (state.blacklistEditingId === item.id) {
+            resetBlacklistForm();
+        }
+        state.blacklist = result.items || [];
+        renderBlacklistSummary(result.summary || {});
+        renderBlacklist();
     } catch (error) {
         showMessage("error", error.message);
     }
@@ -981,7 +1383,7 @@ async function exportCurrentAccount(path, ext) {
 
 async function downloadAccountExport(path, ext) {
     const username = (state.account && state.account.username) || "account";
-    const token = sessionStorage.getItem("boss_auth_token");
+    const token = getAuthToken();
     const response = await fetch(path, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
@@ -1009,8 +1411,6 @@ async function loadProxySettings() {
         const btn = byId("saveProxyBtn");
         const status = byId("proxyStatus");
 
-        byId("proxyBar").style.display = "flex";
-
         if (proxyUrl) {
             check.checked = true;
             input.classList.remove("d-none");
@@ -1032,7 +1432,7 @@ async function loadProxySettings() {
             status.className = "proxy-status warn";
         }
     } catch (e) {
-        byId("proxyBar").style.display = "flex";
+        // 顶部代理条常驻，失败时不隐藏
     }
 }
 
@@ -1078,8 +1478,9 @@ async function saveProxy() {
 async function refreshCompanies() {
     clearMessages();
     try {
-        const data = await requestJson("/api/companies?time_filter=" + state.timeFilter);
+        const data = await requestJson(`/api/companies?time_filter=${encodeURIComponent(state.timeFilter)}&channel=${encodeURIComponent(state.hireChannel || "boss")}`);
         state.companies = data.items || [];
+        resetCompanyPage();
         renderCompanies();
         showMessage("success", "列表已刷新，共 " + state.companies.length + " 条记录");
     } catch (error) {
@@ -1090,8 +1491,9 @@ async function refreshCompanies() {
 async function loadCompaniesByTimeFilter() {
     clearMessages();
     try {
-        const data = await requestJson("/api/companies?time_filter=" + state.timeFilter);
+        const data = await requestJson(`/api/companies?time_filter=${encodeURIComponent(state.timeFilter)}&channel=${encodeURIComponent(state.hireChannel || "boss")}`);
         state.companies = data.items || [];
+        resetCompanyPage();
         renderCompanies();
     } catch (error) {
         showMessage("error", "加载失败: " + error.message);
@@ -1127,56 +1529,10 @@ function applyAccount(user) {
         label.textContent = `${user.displayName || user.username}（${user.role === "admin" ? "管理员" : "账号"}）`;
     }
     byId("accountAdminBtn").classList.toggle("d-none", user.role !== "admin");
-    startSessionKeepalive();
-}
-
-function stopSessionKeepalive() {
-    if (sessionKeepaliveTimer) {
-        clearInterval(sessionKeepaliveTimer);
-        sessionKeepaliveTimer = null;
-    }
-}
-
-function startSessionKeepalive() {
-    stopSessionKeepalive();
-    if (!sessionStorage.getItem("boss_auth_token")) {
-        return;
-    }
-    sessionKeepaliveTimer = setInterval(() => {
-        keepSessionAlive();
-    }, SESSION_KEEPALIVE_MS);
-    if (!sessionVisibilityBound) {
-        sessionVisibilityBound = true;
-        document.addEventListener("visibilitychange", onSessionVisibility);
-    }
-}
-
-async function keepSessionAlive() {
-    if (!sessionStorage.getItem("boss_auth_token") || !state.account) {
-        stopSessionKeepalive();
-        return;
-    }
-    try {
-        const data = await requestJson("/api/auth/me");
-        if (data.user) {
-            state.account = data.user;
-        }
-    } catch (error) {
-        // 401 时 requestJson 已清 token 并弹登录；其它错误忽略，下次再试
-        if (!sessionStorage.getItem("boss_auth_token")) {
-            stopSessionKeepalive();
-        }
-    }
-}
-
-function onSessionVisibility() {
-    if (document.visibilityState === "visible" && state.account) {
-        keepSessionAlive();
-    }
 }
 
 async function restoreSession() {
-    if (!sessionStorage.getItem("boss_auth_token")) {
+    if (!getAuthToken()) {
         return null;
     }
     try {
@@ -1185,6 +1541,119 @@ async function restoreSession() {
     } catch (error) {
         return null;
     }
+}
+
+function openAccountAdmin() {
+    const modal = byId("accountAdmin");
+    if (!modal) return;
+    modal.classList.add("is-open");
+    modal.style.display = "flex";
+    modal.setAttribute("aria-hidden", "false");
+    switchAdminTab(state.adminTab || "summary");
+    refreshAdminPane().catch((error) => {
+        byId("accountAdminError").textContent = error.message;
+    });
+}
+
+function switchAdminTab(tab) {
+    state.adminTab = tab;
+    document.querySelectorAll(".admin-tab").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.adminTab === tab);
+    });
+    document.querySelectorAll(".admin-pane").forEach((pane) => {
+        const active = pane.dataset.adminPane === tab;
+        pane.classList.toggle("is-active", active);
+        pane.hidden = !active;
+    });
+}
+
+async function refreshAdminPane() {
+    byId("accountAdminError").textContent = "";
+    if (state.adminTab === "channels") {
+        await loadAdminChannels();
+        return;
+    }
+    if (state.adminTab === "accounts") {
+        await loadAccounts();
+        return;
+    }
+    await loadAdminSummary();
+}
+
+async function loadAdminSummary() {
+    const data = await requestJson("/api/admin/summary");
+    const metrics = byId("adminSummaryMetrics");
+    const totals = data.totals || {};
+    metrics.innerHTML = `
+        <article><span>账号数</span><strong>${totals.user_count ?? 0}</strong></article>
+        <article><span>登记总数</span><strong>${totals.company_count ?? 0}</strong></article>
+        <article><span>渠道数</span><strong>${totals.channel_count ?? 0}</strong></article>
+    `;
+    const body = byId("adminSummaryBody");
+    body.replaceChildren();
+    (data.users || []).forEach((user) => {
+        const row = document.createElement("tr");
+        const byChannel = user.by_channel || {};
+        const channelText = Object.keys(byChannel).length
+            ? Object.entries(byChannel).map(([k, v]) => `${k}:${v}`).join(" · ")
+            : "-";
+        row.innerHTML = "<td></td><td></td><td></td><td></td><td></td>";
+        row.children[0].textContent = `${user.username}${user.displayName ? `（${user.displayName}）` : ""}`;
+        row.children[1].textContent = user.role === "admin" ? "管理员" : "普通";
+        row.children[2].textContent = String(user.company_count ?? 0);
+        row.children[3].textContent = String(user.blacklist_count ?? 0);
+        row.children[4].textContent = channelText;
+        body.appendChild(row);
+    });
+}
+
+async function loadAdminChannels() {
+    const summary = await requestJson("/api/admin/summary");
+    const residual = (summary.totals && summary.totals.by_channel) || {};
+    state.channels = summary.channels || [];
+    const body = byId("adminChannelBody");
+    body.replaceChildren();
+    (state.channels || []).forEach((item) => {
+        const row = document.createElement("tr");
+        const action = document.createElement("td");
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "btn btn-sm btn-outline-danger";
+        delBtn.textContent = "删除页签";
+        delBtn.addEventListener("click", async () => {
+            const count = residual[item.id] || 0;
+            const tip = count
+                ? `移除渠道「${item.name}」？各账号共 ${count} 条公司数据将保留为残留，不会删除。`
+                : `移除渠道「${item.name}」？`;
+            if (!window.confirm(tip)) return;
+            try {
+                const result = await requestJson(`/api/channels/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+                byId("accountAdminError").textContent = result.message || "已删除";
+                await loadChannels();
+                await loadAdminChannels();
+                await switchHireChannel(state.hireChannel);
+            } catch (error) {
+                byId("accountAdminError").textContent = error.message;
+            }
+        });
+        action.appendChild(delBtn);
+        row.innerHTML = "<td></td><td></td><td></td><td></td>";
+        row.children[0].textContent = item.id;
+        row.children[1].textContent = item.name || item.id;
+        row.children[2].textContent = String(residual[item.id] || 0);
+        row.children[3].replaceWith(action);
+        body.appendChild(row);
+    });
+    renderChannelTabs();
+}
+
+function closeAccountAdmin() {
+    const modal = byId("accountAdmin");
+    if (!modal) return;
+    modal.classList.remove("is-open");
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+    byId("accountAdminError").textContent = "";
 }
 
 function bindAccountEvents() {
@@ -1199,7 +1668,7 @@ function bindAccountEvents() {
                     password: byId("loginPassword").value,
                 }),
             });
-            sessionStorage.setItem("boss_auth_token", result.token);
+            setAuthToken(result.token);
             hideLoginGate();
             applyAccount(result.user);
             await openWorkspace();
@@ -1219,7 +1688,7 @@ function bindAccountEvents() {
                     password: byId("registerPassword").value,
                 }),
             });
-            sessionStorage.setItem("boss_auth_token", result.token);
+            setAuthToken(result.token);
             hideLoginGate();
             applyAccount(result.user);
             await openWorkspace();
@@ -1241,19 +1710,54 @@ function bindAccountEvents() {
         } catch (error) {
             // 本地退出即可
         }
-        sessionStorage.removeItem("boss_auth_token");
+        clearAuthToken();
         state.account = null;
         state.companies = [];
-        stopSessionKeepalive();
         renderCompanies();
         showLoginGate();
     });
     byId("accountAdminBtn").addEventListener("click", () => {
-        byId("accountAdmin").classList.remove("d-none");
-        loadAccounts();
+        openAccountAdmin();
     });
     byId("closeAccountAdminBtn").addEventListener("click", () => {
-        byId("accountAdmin").classList.add("d-none");
+        closeAccountAdmin();
+    });
+    document.querySelectorAll(".admin-tab").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            switchAdminTab(btn.dataset.adminTab || "summary");
+            refreshAdminPane().catch((error) => {
+                byId("accountAdminError").textContent = error.message;
+            });
+        });
+    });
+    byId("createChannelForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        byId("accountAdminError").textContent = "";
+        try {
+            await requestJson("/api/channels", {
+                method: "POST",
+                body: JSON.stringify({
+                    name: byId("newChannelName").value.trim(),
+                    id: byId("newChannelId").value.trim() || undefined,
+                }),
+            });
+            byId("createChannelForm").reset();
+            await loadChannels();
+            await loadAdminChannels();
+        } catch (error) {
+            byId("accountAdminError").textContent = error.message;
+        }
+    });
+    byId("adminImportFileInput").addEventListener("change", handleAdminImportFile);
+    byId("accountAdmin").addEventListener("click", (event) => {
+        if (event.target === byId("accountAdmin")) {
+            closeAccountAdmin();
+        }
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && byId("accountAdmin").classList.contains("is-open")) {
+            closeAccountAdmin();
+        }
     });
     byId("cancelResetPasswordBtn").addEventListener("click", closeResetPasswordModal);
     byId("confirmResetPasswordBtn").addEventListener("click", confirmResetPassword);
@@ -1283,70 +1787,91 @@ async function loadAccounts() {
     const body = byId("accountTableBody");
     body.replaceChildren();
     (data.users || []).forEach((user) => {
-        const row = document.createElement("tr");
-        const action = document.createElement("td");
-        action.className = "account-actions";
+        const card = document.createElement("article");
+        card.className = "admin-account-card";
 
-        const resetBtn = document.createElement("button");
-        resetBtn.type = "button";
-        resetBtn.className = "btn btn-sm btn-outline-primary";
-        resetBtn.textContent = "重置密码";
-        resetBtn.addEventListener("click", () => openResetPasswordModal(user));
-        action.appendChild(resetBtn);
+        const head = document.createElement("div");
+        head.className = "admin-account-head";
+        const title = document.createElement("div");
+        title.className = "admin-account-title";
+        title.innerHTML = `<strong></strong><span></span>`;
+        title.querySelector("strong").textContent = user.username;
+        title.querySelector("span").textContent = user.displayName || "未设置显示名";
+        const meta = document.createElement("div");
+        meta.className = "admin-account-meta";
+        meta.textContent = `${user.role === "admin" ? "管理员" : "普通账号"} · ${user.locked ? "已锁定" : "正常"}`;
+        head.append(title, meta);
+        card.appendChild(head);
 
-        const exportBtn = document.createElement("button");
-        exportBtn.type = "button";
-        exportBtn.className = "btn btn-sm btn-outline-success";
-        exportBtn.textContent = "导出备份";
-        exportBtn.addEventListener("click", () => exportAccountBackup(user));
-        action.appendChild(exportBtn);
+        const hireGroup = document.createElement("div");
+        hireGroup.className = "admin-action-group";
+        hireGroup.innerHTML = `<div class="admin-action-label">投递登记</div>`;
+        const hireActions = document.createElement("div");
+        hireActions.className = "admin-action-btns";
+        hireActions.append(
+            makeAdminBtn("导出登记备份", "btn-outline-success", () => exportAccountBackup(user)),
+            makeAdminBtn("导出登记CSV", "btn-outline-secondary", () => exportAccountCsv(user)),
+            makeAdminBtn("导入登记合并", "btn-outline-primary", () => pickAdminImport(user, "merge", "hire")),
+            makeAdminBtn("导入登记覆盖", "btn-outline-warning", () => pickAdminImport(user, "overwrite", "hire")),
+        );
+        hireGroup.appendChild(hireActions);
 
-        const exportCsvBtn = document.createElement("button");
-        exportCsvBtn.type = "button";
-        exportCsvBtn.className = "btn btn-sm btn-outline-secondary";
-        exportCsvBtn.textContent = "导出CSV";
-        exportCsvBtn.addEventListener("click", () => exportAccountCsv(user));
-        action.appendChild(exportCsvBtn);
+        const blackGroup = document.createElement("div");
+        blackGroup.className = "admin-action-group";
+        blackGroup.innerHTML = `<div class="admin-action-label">企业黑名单</div>`;
+        const blackActions = document.createElement("div");
+        blackActions.className = "admin-action-btns";
+        blackActions.append(
+            makeAdminBtn("导出黑名单", "btn-outline-success", () => exportAccountBlacklist(user)),
+            makeAdminBtn("导出黑名单CSV", "btn-outline-secondary", () => exportAccountBlacklistCsv(user)),
+            makeAdminBtn("导入黑名单合并", "btn-outline-primary", () => pickAdminImport(user, "merge", "blacklist")),
+            makeAdminBtn("导入黑名单覆盖", "btn-outline-warning", () => pickAdminImport(user, "overwrite", "blacklist")),
+        );
+        blackGroup.appendChild(blackActions);
 
+        const accountGroup = document.createElement("div");
+        accountGroup.className = "admin-action-group";
+        accountGroup.innerHTML = `<div class="admin-action-label">账号</div>`;
+        const accountActions = document.createElement("div");
+        accountActions.className = "admin-action-btns";
+        accountActions.appendChild(makeAdminBtn("重置密码", "btn-outline-primary", () => openResetPasswordModal(user)));
         if (!user.legacyStore) {
-            const lockBtn = document.createElement("button");
-            lockBtn.type = "button";
-            lockBtn.className = "btn btn-sm btn-outline-warning";
-            lockBtn.textContent = user.locked ? "解锁" : "锁定";
-            lockBtn.addEventListener("click", async () => {
-                await requestJson(`/api/auth/users/${user.id}`, {
-                    method: "PUT",
-                    body: JSON.stringify({ locked: !user.locked }),
-                });
-                await loadAccounts();
-            });
-            const deleteBtn = document.createElement("button");
-            deleteBtn.type = "button";
-            deleteBtn.className = "btn btn-sm btn-outline-danger";
-            deleteBtn.textContent = "删除";
-            deleteBtn.addEventListener("click", async () => {
-                if (!window.confirm(`删除账号「${user.username}」？该公司数据不会自动并入其他账号。`)) {
-                    return;
-                }
-                await requestJson(`/api/auth/users/${user.id}`, { method: "DELETE" });
-                await loadAccounts();
-            });
-            action.append(lockBtn, deleteBtn);
+            accountActions.append(
+                makeAdminBtn(user.locked ? "解锁" : "锁定", "btn-outline-warning", async () => {
+                    await requestJson(`/api/auth/users/${user.id}`, {
+                        method: "PUT",
+                        body: JSON.stringify({ locked: !user.locked }),
+                    });
+                    await loadAccounts();
+                }),
+                makeAdminBtn("删除账号", "btn-outline-danger", async () => {
+                    if (!window.confirm(`删除账号「${user.username}」？登记与黑名单残留数据不会自动并入其他账号。`)) {
+                        return;
+                    }
+                    await requestJson(`/api/auth/users/${user.id}`, { method: "DELETE" });
+                    await loadAccounts();
+                }),
+            );
         } else {
             const tip = document.createElement("span");
             tip.className = "muted-line";
             tip.textContent = "默认管理员";
-            action.appendChild(tip);
+            accountActions.appendChild(tip);
         }
+        accountGroup.appendChild(accountActions);
 
-        row.innerHTML = `<td></td><td></td><td></td><td></td><td></td>`;
-        row.children[0].textContent = user.username;
-        row.children[1].textContent = user.displayName || "";
-        row.children[2].textContent = user.role === "admin" ? "管理员" : "普通账号";
-        row.children[3].textContent = user.locked ? "已锁定" : "正常";
-        row.children[4].replaceWith(action);
-        body.appendChild(row);
+        card.append(hireGroup, blackGroup, accountGroup);
+        body.appendChild(card);
     });
+}
+
+function makeAdminBtn(text, styleClass, onClick) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `btn btn-sm ${styleClass}`;
+    btn.textContent = text;
+    btn.addEventListener("click", onClick);
+    return btn;
 }
 
 let resetPasswordTarget = null;
@@ -1412,9 +1937,9 @@ async function exportAccountBackup(user) {
     try {
         await downloadAuthedFile(
             `/api/auth/users/${user.id}/export`,
-            `backup_${user.username || "account"}.json`
+            `hire-backup_${user.username || "account"}.json`
         );
-        showMessage("success", `已导出账号「${user.username}」的备份`);
+        showMessage("success", `已导出账号「${user.username}」的登记备份`);
     } catch (error) {
         byId("accountAdminError").textContent = error.message;
     }
@@ -1425,16 +1950,42 @@ async function exportAccountCsv(user) {
     try {
         await downloadAuthedFile(
             `/api/auth/users/${user.id}/export.csv`,
-            `${user.username || "account"}-companies.csv`
+            `${user.username || "account"}-hire-companies.csv`
         );
-        showMessage("success", `已导出账号「${user.username}」的 CSV`);
+        showMessage("success", `已导出账号「${user.username}」的登记 CSV`);
+    } catch (error) {
+        byId("accountAdminError").textContent = error.message;
+    }
+}
+
+async function exportAccountBlacklist(user) {
+    byId("accountAdminError").textContent = "";
+    try {
+        await downloadAuthedFile(
+            `/api/auth/users/${user.id}/blacklist/export`,
+            `blacklist-backup_${user.username || "account"}.json`
+        );
+        showMessage("success", `已导出账号「${user.username}」的黑名单备份`);
+    } catch (error) {
+        byId("accountAdminError").textContent = error.message;
+    }
+}
+
+async function exportAccountBlacklistCsv(user) {
+    byId("accountAdminError").textContent = "";
+    try {
+        await downloadAuthedFile(
+            `/api/auth/users/${user.id}/blacklist/export.csv`,
+            `${user.username || "account"}-blacklist.csv`
+        );
+        showMessage("success", `已导出账号「${user.username}」的黑名单 CSV`);
     } catch (error) {
         byId("accountAdminError").textContent = error.message;
     }
 }
 
 async function downloadAuthedFile(path, fallbackName) {
-    const token = sessionStorage.getItem("boss_auth_token");
+    const token = getAuthToken();
     const response = await fetch(path, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
@@ -1457,4 +2008,66 @@ async function downloadAuthedFile(path, fallbackName) {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+}
+
+
+function pickAdminImport(user, mode, kind = "hire") {
+    state.adminImportTarget = user;
+    state.adminImportMode = mode === "overwrite" ? "overwrite" : "merge";
+    state.adminImportKind = kind === "blacklist" ? "blacklist" : "hire";
+    byId("adminImportFileInput").value = "";
+    byId("adminImportFileInput").click();
+}
+
+async function handleAdminImportFile(event) {
+    const file = event.target.files[0];
+    const user = state.adminImportTarget;
+    if (!file || !user) return;
+    const kind = state.adminImportKind === "blacklist" ? "blacklist" : "hire";
+    const kindLabel = kind === "blacklist" ? "黑名单" : "登记";
+    if (state.adminImportMode === "overwrite") {
+        const ok = window.confirm(`导入并覆盖会替换账号「${user.username}」的${kindLabel}数据，确定继续？`);
+        if (!ok) {
+            event.target.value = "";
+            return;
+        }
+    }
+    byId("accountAdminError").textContent = "";
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const textContent = e.target.result;
+        let endpoint;
+        if (kind === "blacklist") {
+            endpoint = state.adminImportMode === "overwrite"
+                ? `/api/auth/users/${user.id}/blacklist/import-overwrite`
+                : `/api/auth/users/${user.id}/blacklist/import`;
+        } else {
+            endpoint = state.adminImportMode === "overwrite"
+                ? `/api/auth/users/${user.id}/import-overwrite`
+                : `/api/auth/users/${user.id}/import`;
+        }
+        try {
+            const result = await requestJson(endpoint, {
+                method: "POST",
+                body: JSON.stringify({ text: textContent }),
+            });
+            byId("accountAdminError").textContent = result.message || "导入完成";
+            await refreshAdminPane();
+            if (state.account && state.account.id === user.id) {
+                if (kind === "blacklist") {
+                    await loadBlacklist();
+                } else {
+                    await loadSummary();
+                    await loadCompanies();
+                }
+            }
+        } catch (error) {
+            byId("accountAdminError").textContent = error.message;
+        } finally {
+            event.target.value = "";
+            state.adminImportTarget = null;
+            state.adminImportKind = "hire";
+        }
+    };
+    reader.readAsText(file, "utf-8");
 }

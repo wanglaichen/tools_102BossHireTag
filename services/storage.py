@@ -2,8 +2,9 @@ import contextvars
 import json
 import os
 import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # primary=本次已成功读到数据库；failed=读取失败，禁止把该结果写回。
 _read_source: contextvars.ContextVar[str] = contextvars.ContextVar("boss_hire_read_source", default="primary")
@@ -71,13 +72,24 @@ class JsonStorage:
 
 
 class RedisStorage:
-    def __init__(self, url: str, key_prefix: str, timeout_seconds: float = 5) -> None:
+    def __init__(
+        self,
+        url: str,
+        key_prefix: str,
+        timeout_seconds: float = 15,
+        *,
+        data_hash_name: str = "companies",
+    ) -> None:
         if redis is None:
             raise StorageUnavailable("redis 依赖未安装，请先执行 pip install -r requirements.txt")
         self.url = url
         self.key_prefix = key_prefix.rstrip(":")
-        self._timeout = timeout_seconds
+        self.data_hash_name = (data_hash_name or "companies").strip() or "companies"
+        self._timeout = max(float(timeout_seconds or 15), 5.0)
         self._client: redis.Redis | None = None
+        self._scan_count = 200
+        self._read_retries = 3
+        self._blacklist_migrated = False
 
     @property
     def client(self) -> redis.Redis:
@@ -87,12 +99,78 @@ class RedisStorage:
                 decode_responses=True,
                 socket_connect_timeout=self._timeout,
                 socket_timeout=self._timeout,
+                retry_on_timeout=True,
+                health_check_interval=30,
             )
         return self._client
 
+    def _reset_client(self) -> None:
+        client = self._client
+        self._client = None
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    def _is_transient_redis_error(self, exc: Exception) -> bool:
+        names = {"TimeoutError", "ConnectionError", "BusyLoadingError", "ConnectionResetError", "OSError"}
+        if type(exc).__name__ in names:
+            return True
+        if redis is not None:
+            for attr in ("TimeoutError", "ConnectionError", "BusyLoadingError"):
+                cls = getattr(redis, attr, None)
+                if cls is not None and isinstance(exc, cls):
+                    return True
+        return False
+
+    def _call_with_retry(self, fn: Callable[[], Any], *, attempts: int | None = None) -> Any:
+        total = attempts or self._read_retries
+        last_exc: Exception | None = None
+        for index in range(total):
+            try:
+                return fn()
+            except StorageUnavailable:
+                raise
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_transient_redis_error(exc) or index >= total - 1:
+                    raise
+                self._reset_client()
+                time.sleep(0.2 * (index + 1))
+        if last_exc is not None:
+            raise last_exc
+        raise StorageUnavailable("读取数据库失败，已取消本次操作，不会回写")
+
     @property
     def _companies_key(self) -> str:
+        return f"{self.key_prefix}:{self.data_hash_name}"
+
+    @property
+    def _legacy_companies_key(self) -> str:
+        """黑名单旧 key：…:blacklist:companies；新 key：…:blacklist:items。"""
         return f"{self.key_prefix}:companies"
+
+    def _migrate_blacklist_hash_if_needed(self) -> None:
+        if self.data_hash_name != "items" or self._blacklist_migrated:
+            return
+        self._blacklist_migrated = True
+        items_key = self._companies_key
+        legacy_key = self._legacy_companies_key
+        try:
+            if self._key_type(items_key) == "hash" and self.client.hlen(items_key) > 0:
+                return
+            if self._key_type(legacy_key) != "hash" or self.client.hlen(legacy_key) == 0:
+                return
+            pipeline = self.client.pipeline()
+            for field, value in self.client.hscan_iter(legacy_key, count=self._scan_count):
+                pipeline.hset(items_key, field, value)
+            pipeline.delete(legacy_key)
+            pipeline.execute()
+        except Exception:
+            # 迁移失败时仍可读旧 key（见 _read_company_hash）
+            self._blacklist_migrated = False
+            return
 
     @property
     def _meta_key(self) -> str:
@@ -176,30 +254,41 @@ class RedisStorage:
         return len(companies)
 
     def read(self) -> dict[str, Any]:
-        # 先读当前 Hash。旧键扫描失败不能把整次读取打成异常，否则上层会改用空 JSON 再整库覆盖。
-        companies = self._read_company_hash()
-        try:
-            legacy_state = self._read_legacy_state()
-        except Exception:
-            if companies:
-                legacy_state = self._default_data()
-            else:
+        # Hash 用 HSCAN 分批读；有 Hash 数据时不再扫旧字符串键，避免远程 Redis 超时。
+        companies = self._call_with_retry(self._read_company_hash)
+        meta: dict[str, Any] = {}
+        settings: dict[str, Any] = {}
+
+        if companies:
+            try:
+                meta_raw = self._call_with_retry(lambda: self.client.hgetall(self._meta_key))
+                meta = dict(meta_raw) if meta_raw else {}
+            except Exception:
+                meta = {}
+        else:
+            try:
+                legacy_state = self._call_with_retry(self._read_legacy_state)
+            except Exception:
                 raise
-
-        if not companies:
-            companies = legacy_state.get("companies", [])
-
-        meta_raw = self.client.hgetall(self._meta_key)
-        meta = dict(meta_raw) if meta_raw else legacy_state.get("meta", {})
+            companies = list(legacy_state.get("companies") or [])
+            meta = dict(legacy_state.get("meta") or {})
+            settings = dict(legacy_state.get("settings") or {})
+            if not meta:
+                try:
+                    meta_raw = self._call_with_retry(lambda: self.client.hgetall(self._meta_key))
+                    meta = dict(meta_raw) if meta_raw else {}
+                except Exception:
+                    meta = {}
 
         return {
             "companies": sorted(companies, key=lambda x: x.get("updated_at") or "", reverse=True),
             "meta": meta,
-            "settings": legacy_state.get("settings", {}),
+            "settings": settings,
         }
 
     def upsert_company(self, record: dict[str, Any], meta_updates: dict[str, Any] | None = None) -> None:
         """写入单条公司，不删除 Hash 里的其他记录。"""
+        self._migrate_blacklist_hash_if_needed()
         company_id = str(record.get("id") or "").strip()
         if not company_id:
             raise ValueError("记录缺少 id")
@@ -209,6 +298,8 @@ class RedisStorage:
         score = self._timestamp_score(record.get("created_at"))
         if score is not None:
             pipeline.zadd(self._timestamps_key, {company_id: score})
+        if self.data_hash_name == "items":
+            pipeline.delete(self._legacy_companies_key)
         if meta_updates:
             pipeline.hset(
                 self._meta_key,
@@ -464,6 +555,7 @@ return cjson.encode({deleted = deleted, kept = kept})
             raise StorageUnavailable(f"覆盖写入已取消，没有改动现有数据: {exc}") from exc
 
     def write(self, data: dict[str, Any], replace: bool = False, base_ids: list[str] | None = None) -> None:
+        self._migrate_blacklist_hash_if_needed()
         if replace:
             self._replace_with_lua(data, list(base_ids or []))
             return
@@ -499,6 +591,9 @@ return cjson.encode({deleted = deleted, kept = kept})
         else:
             pipeline.delete(self._companies_key)
 
+        if self.data_hash_name == "items":
+            pipeline.delete(self._legacy_companies_key)
+
         meta = data.get("meta", {})
         pipeline.delete(self._meta_key)
         if meta:
@@ -510,21 +605,33 @@ return cjson.encode({deleted = deleted, kept = kept})
         pipeline.execute()
 
     def _read_company_hash(self) -> list[dict[str, Any]]:
-        if self._key_type(self._companies_key) != "hash":
-            return []
+        self._migrate_blacklist_hash_if_needed()
+        keys_to_try = [self._companies_key]
+        if self.data_hash_name == "items":
+            keys_to_try.append(self._legacy_companies_key)
 
         companies: list[dict[str, Any]] = []
         skipped = 0
-        for raw in self.client.hgetall(self._companies_key).values():
-            try:
-                item = json.loads(raw)
-            except (TypeError, json.JSONDecodeError):
-                skipped += 1
+        found_hash = False
+        for key in keys_to_try:
+            if self._key_type(key) != "hash":
                 continue
-            if not isinstance(item, dict):
-                skipped += 1
-                continue
-            companies.append(item)
+            found_hash = True
+            # 用 HSCAN 分批拉取，避免 HGETALL 一次性超时（远程 Redis / 记录偏多时常见）
+            for _field, raw in self.client.hscan_iter(key, count=self._scan_count):
+                try:
+                    item = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    skipped += 1
+                    continue
+                if not isinstance(item, dict):
+                    skipped += 1
+                    continue
+                companies.append(item)
+            if companies:
+                break
+        if not found_hash:
+            return []
         if skipped:
             raise StorageUnavailable(f"有 {skipped} 条公司记录无法解析，已停止操作，不会回写")
         return companies
@@ -583,13 +690,18 @@ class FallbackStorage:
         self.fallback = fallback
         self._use_fallback = False
         self._tested = False
+        self._last_probe_at = 0.0
+        self._probe_interval_seconds = 30.0
 
     def _test_primary(self) -> bool:
-        if self._tested:
+        now = time.time()
+        # 失败后定期再探测，避免一次超时后整进程永久不可用
+        if self._tested and (now - self._last_probe_at) < self._probe_interval_seconds:
             return not self._use_fallback
         self._tested = True
+        self._last_probe_at = now
         try:
-            self.primary.client.ping()
+            self.primary._call_with_retry(lambda: self.primary.client.ping())
             self._use_fallback = False
             return True
         except Exception:
@@ -603,6 +715,8 @@ class FallbackStorage:
             return _read_primary_or_raise(self.primary)
         except StorageUnavailable:
             _read_source.set("failed")
+            # 允许下次请求重新探测 Redis
+            self._last_probe_at = 0.0
             raise
 
     def write(self, data: dict[str, Any], replace: bool = False, base_ids: list[str] | None = None) -> None:
@@ -655,7 +769,11 @@ class QuickFallbackStorage:
         return self._use_fallback
 
 
-def create_storage(config: dict[str, Any]) -> JsonStorage | RedisStorage | FallbackStorage:
+def create_storage(
+    config: dict[str, Any],
+    *,
+    data_hash_name: str = "companies",
+) -> JsonStorage | RedisStorage | FallbackStorage:
     backend = config.get("STORAGE_BACKEND", "auto").strip().lower()
     if backend == "json":
         return JsonStorage(config["STORAGE_FILE"])
@@ -666,8 +784,9 @@ def create_storage(config: dict[str, Any]) -> JsonStorage | RedisStorage | Fallb
     if redis_url:
         redis_storage = RedisStorage(
             redis_url,
-            config.get("REDIS_KEY_PREFIX", "jjob/tools102-boss-hire-tag/state"),
+            config.get("REDIS_KEY_PREFIX", "jjob:tools102-boss-hire-tag:state"),
             float(config.get("REDIS_TIMEOUT_SECONDS", 5)),
+            data_hash_name=data_hash_name,
         )
         if json_path:
             json_storage = JsonStorage(json_path)

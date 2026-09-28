@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from services.channel_service import normalize_channel_id
 from services.storage import JsonStorage, RedisStorage, create_storage
 
 
@@ -20,6 +21,8 @@ DEFAULT_SETTINGS = {
     "industry_options": ["棋牌", "游戏", "互联网"],
 }
 
+DEFAULT_CHANNEL = "boss"
+
 BACKUP_TYPE = "tools102-boss-hire-tag-backup"
 BACKUP_SCHEMA_VERSION = 1
 
@@ -33,6 +36,8 @@ HEADER_ALIASES = {
     "是否是外包": "is_outsourced",
     "是否已面试": "is_interviewed",
     "备注": "note",
+    "渠道": "channel",
+    "招聘渠道": "channel",
     "company_name": "company_name",
     "effect_status": "effect_status",
     "industry": "industry",
@@ -40,6 +45,7 @@ HEADER_ALIASES = {
     "is_outsourced": "is_outsourced",
     "is_interviewed": "is_interviewed",
     "note": "note",
+    "channel": "channel",
 }
 
 
@@ -52,8 +58,11 @@ class CompanyService:
     def from_app_config(cls, config: dict[str, Any]) -> "CompanyService":
         return cls(create_storage(config))
 
-    def list_companies(self, time_filter: str = "all") -> list[dict[str, Any]]:
+    def list_companies(self, time_filter: str = "all", channel: str | None = None) -> list[dict[str, Any]]:
         all_items = self._read_state()["companies"]
+        channel_id = self._normalize_channel(channel) if channel else None
+        if channel_id:
+            all_items = [item for item in all_items if self._item_channel(item) == channel_id]
 
         if time_filter == "all":
             return sorted(all_items, key=lambda item: item.get("updated_at") or "", reverse=True)
@@ -131,8 +140,8 @@ class CompanyService:
         self.storage.write(data)
         return next_settings
 
-    def get_summary(self) -> dict[str, Any]:
-        items = self.list_companies()
+    def get_summary(self, channel: str | None = None) -> dict[str, Any]:
+        items = self.list_companies(channel=channel)
         statuses = set()
         industries = set()
         for item in items:
@@ -163,19 +172,28 @@ class CompanyService:
             "outsourced_count": outsourced_count,
             "interviewed_count": interviewed_count,
             "follow_up_count": follow_up_count,
+            "channel": self._normalize_channel(channel) if channel else "",
             "statuses": sorted(set(settings["status_options"]) | statuses),
             "industries": sorted(set(settings["industry_options"]) | industries),
             "settings": settings,
             "last_updated_at": max((item.get("updated_at") or "" for item in items), default=""),
         }
 
+    def count_by_channel(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in self._read_state()["companies"]:
+            cid = self._item_channel(item)
+            counts[cid] = counts.get(cid, 0) + 1
+        return counts
+
     def create_company(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = self._read_state()
         company_name = self._clean_text(payload.get("company_name"), FIELD_LIMITS["company_name"])
         if not company_name:
             raise ValueError("企业名称不能为空")
-        if self._find_by_name(data["companies"], company_name):
-            raise ValueError("企业名称已存在，请编辑原记录")
+        channel = self._normalize_channel(payload.get("channel"))
+        if self._find_by_name(data["companies"], company_name, channel=channel):
+            raise ValueError("当前渠道下企业名称已存在，请编辑原记录")
 
         now = self._now()
         record = self._build_record(payload, company_name=company_name, now=now)
@@ -190,13 +208,14 @@ class CompanyService:
         if not record:
             raise ValueError("记录不存在")
 
+        channel = self._normalize_channel(payload.get("channel") if "channel" in payload else record.get("channel"))
         if "company_name" in payload:
             company_name = self._clean_text(payload.get("company_name"), FIELD_LIMITS["company_name"])
             if not company_name:
                 raise ValueError("企业名称不能为空")
-            duplicate = self._find_by_name(data["companies"], company_name)
+            duplicate = self._find_by_name(data["companies"], company_name, channel=channel)
             if duplicate and duplicate["id"] != company_id:
-                raise ValueError("企业名称已存在，请编辑原记录")
+                raise ValueError("当前渠道下企业名称已存在，请编辑原记录")
             record["company_name"] = company_name
 
         for field in ("effect_status", "industry", "note"):
@@ -206,6 +225,9 @@ class CompanyService:
         for field in ("is_hunter", "is_outsourced", "is_interviewed"):
             if field in payload:
                 record[field] = self._normalize_flag(payload.get(field))
+
+        if "channel" in payload:
+            record["channel"] = channel
 
         now = self._now()
         record["updated_at"] = now
@@ -265,10 +287,11 @@ class CompanyService:
             return
         self.storage.write(data)
 
-    def import_rows(self, text: str, overwrite: bool = False) -> dict[str, Any]:
+    def import_rows(self, text: str, overwrite: bool = False, channel: str | None = None) -> dict[str, Any]:
         if not text.strip():
             raise ValueError("导入内容不能为空")
 
+        channel_id = self._normalize_channel(channel) if channel else None
         backup_payload = self._try_parse_structured_payload(text)
         if backup_payload is not None:
             if overwrite:
@@ -293,6 +316,8 @@ class CompanyService:
             existing_map = {c["company_name"]: c for c in data["companies"]}
             now = self._now()
             new_companies = []
+            if channel_id:
+                new_companies.extend([c for c in data["companies"] if self._item_channel(c) != channel_id])
             imported_count = 0
 
             for row in rows:
@@ -300,8 +325,10 @@ class CompanyService:
                 if not normalized:
                     continue
 
+                row_channel = self._normalize_channel(normalized.get("channel") or channel_id)
+                normalized["channel"] = row_channel
                 existing = existing_map.get(normalized["company_name"])
-                if existing:
+                if existing and (not channel_id or self._item_channel(existing) == channel_id):
                     existing.update(normalized)
                     existing["updated_at"] = now
                     new_companies.append(existing)
@@ -320,10 +347,10 @@ class CompanyService:
             self._ensure_imported_option_tags(None, new_companies)
             return {
                 "imported_count": imported_count,
-                "updated_count": len(new_companies) - imported_count,
+                "updated_count": max(0, len([c for c in new_companies if not channel_id or self._item_channel(c) == channel_id]) - imported_count),
                 "skipped_count": 0,
-                "items": self.list_companies(),
-                "summary": self.get_summary(),
+                "items": self.list_companies(channel=channel_id),
+                "summary": self.get_summary(channel=channel_id),
             }
 
         # 普通导入：合并（存在则更新，不存在则新增）
@@ -338,8 +365,10 @@ class CompanyService:
             if not normalized:
                 skipped_count += 1
                 continue
+            row_channel = self._normalize_channel(normalized.get("channel") or channel_id)
+            normalized["channel"] = row_channel
 
-            existing = self._find_by_name(data["companies"], normalized["company_name"])
+            existing = self._find_by_name(data["companies"], normalized["company_name"], channel=row_channel)
             if existing:
                 existing.update(normalized)
                 existing["updated_at"] = now
@@ -783,6 +812,7 @@ class CompanyService:
                 "is_outsourced": self._normalize_flag(item.get("is_outsourced")),
                 "is_interviewed": self._normalize_flag(item.get("is_interviewed")),
                 "note": self._clean_text(item.get("note"), FIELD_LIMITS["note"]),
+                "channel": self._normalize_channel(item.get("channel")),
                 "created_at": created_at,
                 "updated_at": updated_at,
             }
@@ -800,6 +830,7 @@ class CompanyService:
         return {
             "id": str(uuid.uuid4()),
             "company_name": company_name,
+            "channel": self._normalize_channel(payload.get("channel")),
             "effect_status": self._clean_text(payload.get("effect_status"), FIELD_LIMITS["effect_status"]),
             "industry": self._clean_text(payload.get("industry"), FIELD_LIMITS["industry"]),
             "is_hunter": self._normalize_flag(payload.get("is_hunter")),
@@ -946,12 +977,28 @@ class CompanyService:
         return next((item for item in items if item.get("id") == company_id), None)
 
     @staticmethod
-    def _find_by_name(items: list[dict[str, Any]], company_name: str) -> dict[str, Any] | None:
+    def _normalize_channel(value: Any) -> str:
+        return normalize_channel_id(str(value or "")) or DEFAULT_CHANNEL
+
+    @classmethod
+    def _item_channel(cls, item: dict[str, Any] | None) -> str:
+        if not item:
+            return DEFAULT_CHANNEL
+        return cls._normalize_channel(item.get("channel"))
+
+    @classmethod
+    def _find_by_name(
+        cls, items: list[dict[str, Any]], company_name: str, channel: str | None = None
+    ) -> dict[str, Any] | None:
         normalized_name = company_name.casefold()
-        return next(
-            (item for item in items if item.get("company_name", "").casefold() == normalized_name),
-            None,
-        )
+        channel_id = cls._normalize_channel(channel) if channel is not None else None
+        for item in items:
+            if item.get("company_name", "").casefold() != normalized_name:
+                continue
+            if channel_id is not None and cls._item_channel(item) != channel_id:
+                continue
+            return item
+        return None
 
     @staticmethod
     def _now() -> str:

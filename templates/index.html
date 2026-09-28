@@ -9,63 +9,93 @@
 </head>
 <body>
     <div class="app-shell">
-        <header class="topbar">
-            <div class="hero-copy">
-                <p class="eyebrow">Resume Delivery Tracker <span class="app-version" id="appVersion">{{ app_version }}</span></p>
-                <h1>简历投递公司标记</h1>
-                <p>配置交流状态和行业字典，记录投递结果、猎头、外包、面试状态，并支持双击直接编辑。</p>
-            </div>
-            <div class="metrics">
-                <article>
-                    <span>公司总数</span>
-                    <strong id="companyCount">0</strong>
-                </article>
-                <article>
-                    <span>已拒绝</span>
-                    <strong id="rejectedCount">0</strong>
-                </article>
-                <article>
-                    <span>猎头</span>
-                    <strong id="hunterCount">0</strong>
-                </article>
-                <article>
-                    <span>外包</span>
-                    <strong id="outsourcedCount">0</strong>
-                </article>
-                <article>
-                    <span>已面试</span>
-                    <strong id="interviewedCount">0</strong>
-                </article>
-                <article>
-                    <span>需跟进</span>
-                    <strong id="followUpCount">0</strong>
-                </article>
-            </div>
-        </header>
+        <div class="freeze-top" id="freezeTop">
+            <header class="topbar topbar-compact">
+                <div class="hero-copy">
+                    <p class="eyebrow">Resume Delivery Tracker <span class="app-version" id="appVersion">{{ app_version }}</span></p>
+                    <h1>企业投递与风控台</h1>
+                </div>
+            </header>
 
-        <div class="proxy-bar" id="proxyBar">
-            <span class="proxy-label">代理</span>
-            <input type="checkbox" id="proxyEnableCheck" style="margin:0 4px;">
-            <input id="proxyInput" class="form-control form-control-sm d-none" placeholder="http://127.0.0.1:7890" style="width:260px;">
-            <button class="btn btn-sm btn-outline-primary d-none" id="saveProxyBtn">设置</button>
-            <span class="proxy-status" id="proxyStatus"></span>
-            <span class="vr-line"></span>
-            <span class="proxy-label">创建时间</span>
-            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="all">所有</button>
-            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="today">今天</button>
-            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="yesterday">昨天</button>
-            <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="before_yesterday">昨天及以前</button>
-            <button class="btn btn-sm btn-outline-warning" id="fixHistoryBtn">修复历史数据</button>
-            <button class="btn btn-sm btn-outline-success ms-auto" id="refreshCompaniesBtn">刷新列表</button>
-            <span class="proxy-label" id="currentUserLabel"></span>
-            <button class="btn btn-sm btn-outline-primary d-none" id="accountAdminBtn" type="button">账号管理</button>
-            <button class="btn btn-sm btn-outline-secondary" id="logoutBtn" type="button">退出</button>
+            <div class="global-toolbar" id="proxyBar" aria-label="全局工具栏">
+                <span class="proxy-label">代理</span>
+                <input type="checkbox" id="proxyEnableCheck" aria-label="启用代理">
+                <input id="proxyInput" class="form-control form-control-sm d-none" placeholder="http://127.0.0.1:7890">
+                <button class="btn btn-sm btn-outline-primary d-none" id="saveProxyBtn" type="button">设置</button>
+                <span class="proxy-status" id="proxyStatus"></span>
+                <span class="vr-line"></span>
+                <span class="proxy-label" id="currentUserLabel"></span>
+                <button class="btn btn-sm btn-outline-primary d-none" id="accountAdminBtn" type="button">管理中心</button>
+                <button class="btn btn-sm btn-outline-secondary" id="logoutBtn" type="button">退出</button>
+            </div>
+
+            <div class="alert alert-danger d-none" id="errorBox"></div>
+            <div class="alert alert-success d-none" id="successBox"></div>
         </div>
 
-        <div class="alert alert-danger d-none" id="errorBox"></div>
-        <div class="alert alert-success d-none" id="successBox"></div>
+        <div class="app-body">
+            <nav class="feature-rail" aria-label="功能页签">
+                <div class="feature-group is-open" data-feature-group="hire">
+                    <button type="button" class="feature-tab active" data-feature="hire" id="tabHire">
+                        <strong>投递登记</strong>
+                        <span>按招聘渠道</span>
+                    </button>
+                    <div class="feature-subrail" id="hireSubrail" role="tablist" aria-label="招聘渠道"></div>
+                </div>
+                <div class="feature-group" data-feature-group="blacklist">
+                    <button type="button" class="feature-tab" data-feature="blacklist" id="tabBlacklist">
+                        <strong>企业黑名单</strong>
+                        <span>添加与查询</span>
+                    </button>
+                    <div class="feature-subrail" id="blacklistSubrail" role="tablist" aria-label="招聘渠道"></div>
+                </div>
+            </nav>
 
-        <main class="workspace">
+            <div class="feature-stage">
+                <section class="feature-panel is-active" id="panelHire" data-feature="hire">
+                    <div class="hire-channel is-active" id="hireChannelWorkspace" data-channel="boss">
+                    <header class="channel-page-head">
+                        <span class="channel-page-kicker">投递登记</span>
+                        <h1 class="channel-page-title" id="hirePageTitle">boss</h1>
+                    </header>
+                    <div class="metrics">
+                        <article class="metric-card metric-total">
+                            <span class="metric-label">公司总数</span>
+                            <strong class="metric-value" id="companyCount">0</strong>
+                        </article>
+                        <article class="metric-card metric-rejected">
+                            <span class="metric-label">已拒绝</span>
+                            <strong class="metric-value" id="rejectedCount">0</strong>
+                        </article>
+                        <article class="metric-card metric-hunter">
+                            <span class="metric-label">猎头</span>
+                            <strong class="metric-value" id="hunterCount">0</strong>
+                        </article>
+                        <article class="metric-card metric-outsourced">
+                            <span class="metric-label">外包</span>
+                            <strong class="metric-value" id="outsourcedCount">0</strong>
+                        </article>
+                        <article class="metric-card metric-interviewed">
+                            <span class="metric-label">已面试</span>
+                            <strong class="metric-value" id="interviewedCount">0</strong>
+                        </article>
+                        <article class="metric-card metric-follow">
+                            <span class="metric-label">需跟进</span>
+                            <strong class="metric-value" id="followUpCount">0</strong>
+                        </article>
+                    </div>
+
+                    <div class="hire-toolbar" id="hireToolbar">
+                        <span class="proxy-label">创建时间</span>
+                        <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="all">所有</button>
+                        <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="today">今天</button>
+                        <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="yesterday">昨天</button>
+                        <button class="btn btn-sm btn-outline-secondary time-filter-btn" data-filter="before_yesterday">昨天及以前</button>
+                        <button class="btn btn-sm btn-outline-warning" id="fixHistoryBtn">修复历史数据</button>
+                        <button class="btn btn-sm btn-outline-success ms-auto" id="refreshCompaniesBtn">刷新列表</button>
+                    </div>
+
+                    <main class="workspace">
             <div class="resize-handle" id="workspaceResizeHandle"></div>
             <section class="side-panel">
                 <div class="panel-title">
@@ -222,8 +252,83 @@
                         </tbody>
                     </table>
                 </div>
+                <div class="pager-bar" id="companyPager">
+                    <div class="pager-info" id="pagerInfo">共 0 条</div>
+                    <div class="pager-size" role="group" aria-label="每页条数">
+                        <span class="pager-label">每页</span>
+                        <button type="button" class="pager-size-btn" data-size="10">10</button>
+                        <button type="button" class="pager-size-btn" data-size="20">20</button>
+                        <button type="button" class="pager-size-btn active" data-size="30">30</button>
+                        <button type="button" class="pager-size-btn" data-size="50">50</button>
+                        <button type="button" class="pager-size-btn" data-size="100">100</button>
+                    </div>
+                    <div class="pager-nav">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="pagerPrevBtn">上一页</button>
+                        <span class="pager-page" id="pagerPageLabel">1 / 1</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="pagerNextBtn">下一页</button>
+                    </div>
+                </div>
             </section>
         </main>
+                    </div>
+                </section>
+
+                <section class="feature-panel" id="panelBlacklist" data-feature="blacklist" hidden>
+                    <header class="channel-page-head">
+                        <span class="channel-page-kicker">企业黑名单</span>
+                        <h1 class="channel-page-title" id="blacklistPageTitle">boss</h1>
+                    </header>
+                    <div class="blacklist-layout">
+                        <aside class="blacklist-side">
+                            <div class="panel-title">
+                                <h2>加入黑名单</h2>
+                                <span id="blacklistLastUpdated">-</span>
+                            </div>
+                            <form id="blacklistForm" class="record-form">
+                                <label>
+                                    <span>企业名称</span>
+                                    <input id="blacklistNameInput" class="form-control" autocomplete="off" required placeholder="输入要拉黑的企业">
+                                </label>
+                                <label>
+                                    <span>拉黑原因</span>
+                                    <textarea id="blacklistReasonInput" class="form-control" rows="4" placeholder="例如：虚假岗位、骚扰候选人、拖欠薪资等"></textarea>
+                                </label>
+                                <button class="btn btn-danger w-100" id="blacklistSubmitBtn" type="submit">加入黑名单</button>
+                                <button class="btn btn-outline-secondary w-100 d-none" id="blacklistCancelBtn" type="button">取消编辑</button>
+                            </form>
+                            <div class="blacklist-summary">
+                                <span>黑名单企业</span>
+                                <strong id="blacklistCount">0</strong>
+                            </div>
+                        </aside>
+                        <section class="table-panel blacklist-table-panel">
+                            <div class="tools">
+                                <div class="search-group">
+                                    <input id="blacklistSearchInput" class="form-control" placeholder="搜索企业名称或拉黑原因">
+                                    <button class="btn btn-outline-primary" id="blacklistSearchBtn" type="button">查询</button>
+                                    <button class="btn btn-outline-secondary" id="blacklistRefreshBtn" type="button">刷新</button>
+                                </div>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="table align-middle mb-0" id="blacklistTable">
+                                    <thead>
+                                        <tr>
+                                            <th>企业名称</th>
+                                            <th>更新时间</th>
+                                            <th>操作</th>
+                                            <th>拉黑原因</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="blacklistTableBody">
+                                        <tr><td colspan="4" class="empty-cell">暂无黑名单记录</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </div>
+                </section>
+            </div>
+        </div>
     </div>
 
     <div id="loginGate" class="login-gate">
@@ -270,31 +375,62 @@
         </div>
     </div>
 
-    <div id="accountAdmin" class="account-admin d-none">
-        <div class="login-card account-card">
+    <div id="accountAdmin" class="account-admin" style="display:none;" aria-hidden="true">
+        <div class="login-card account-card admin-console" role="dialog" aria-modal="true" aria-labelledby="accountAdminTitle">
             <div class="account-head">
-                <h2>账号管理</h2>
+                <h2 id="accountAdminTitle">管理中心</h2>
                 <button class="btn btn-sm btn-outline-secondary" id="closeAccountAdminBtn" type="button">关闭</button>
             </div>
-            <form id="createAccountForm" class="account-create">
-                <input id="newAccountUsername" class="form-control" placeholder="用户名" required>
-                <input id="newAccountDisplayName" class="form-control" placeholder="显示名">
-                <input id="newAccountPassword" class="form-control" type="password" placeholder="密码" required>
-                <select id="newAccountRole" class="form-select">
-                    <option value="user">普通账号</option>
-                    <option value="admin">管理员</option>
-                </select>
-                <button class="btn btn-primary" type="submit">创建</button>
-            </form>
-            <div id="accountAdminError" class="login-error"></div>
-            <div class="table-wrap">
-                <table class="table table-sm align-middle">
-                    <thead>
-                        <tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>操作</th></tr>
-                    </thead>
-                    <tbody id="accountTableBody"></tbody>
-                </table>
+            <div class="admin-tabs" role="tablist">
+                <button type="button" class="admin-tab active" data-admin-tab="summary">汇总</button>
+                <button type="button" class="admin-tab" data-admin-tab="channels">招聘渠道</button>
+                <button type="button" class="admin-tab" data-admin-tab="accounts">账号管理</button>
             </div>
+            <div id="accountAdminError" class="login-error"></div>
+
+            <section class="admin-pane is-active" id="adminPaneSummary" data-admin-pane="summary">
+                <div class="admin-metrics" id="adminSummaryMetrics"></div>
+                <div class="table-wrap">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr><th>账号</th><th>角色</th><th>登记数</th><th>黑名单</th><th>各渠道</th></tr>
+                        </thead>
+                        <tbody id="adminSummaryBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="admin-pane" id="adminPaneChannels" data-admin-pane="channels" hidden>
+                <form id="createChannelForm" class="admin-create-form">
+                    <input id="newChannelName" class="form-control" placeholder="渠道显示名，如 智联" required>
+                    <input id="newChannelId" class="form-control" placeholder="可选 ID，如 zhilian">
+                    <button class="btn btn-primary" type="submit">添加渠道</button>
+                </form>
+                <p class="admin-tip">删除渠道只移除页签，不会删除各账号已有公司数据（残留数据保留，同 ID 重建后可再看见）。</p>
+                <div class="table-wrap">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr><th>ID</th><th>名称</th><th>残留公司数</th><th>操作</th></tr>
+                        </thead>
+                        <tbody id="adminChannelBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="admin-pane" id="adminPaneAccounts" data-admin-pane="accounts" hidden>
+                <form id="createAccountForm" class="admin-create-form">
+                    <input id="newAccountUsername" class="form-control" placeholder="用户名" required>
+                    <input id="newAccountDisplayName" class="form-control" placeholder="显示名">
+                    <input id="newAccountPassword" class="form-control" type="password" placeholder="密码" required>
+                    <select id="newAccountRole" class="form-select">
+                        <option value="user">普通账号</option>
+                        <option value="admin">管理员</option>
+                    </select>
+                    <button class="btn btn-primary" type="submit">创建账号</button>
+                </form>
+                <input id="adminImportFileInput" type="file" accept=".json,.csv,.txt,application/json,text/plain,text/csv" class="d-none">
+                <div class="admin-account-list" id="accountTableBody"></div>
+            </section>
         </div>
     </div>
 

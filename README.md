@@ -9,7 +9,7 @@
 - 同名企业导入时会更新原记录，避免重复。
 - 支持按关键字、效果状态、猎头类型筛选。
 - 支持导出 CSV 和 JSON。
-- 优先使用 Redis 存储，key 统一放在 `jjob/tools102-boss-hire-tag/state` 前缀下。
+- 优先使用 Redis 存储，key 统一放在 `jjob:tools102-boss-hire-tag:state` 前缀下。
 - 支持配置效果状态和行业选项，配置数据也保存在 Redis。
 - 未配置 Redis 时回退到本地 `data/companies.json`，方便本地开发。
 - 支持通过环境变量设置进程代理。
@@ -44,7 +44,7 @@ cp env.example .env
 APP_HOST=0.0.0.0
 APP_PORT=9212
 REDIS_URL=你的 Redis 连接串
-REDIS_KEY_PREFIX=jjob/tools102-boss-hire-tag/state
+REDIS_KEY_PREFIX=jjob:tools102-boss-hire-tag:state
 REDIS_TIMEOUT_SECONDS=5
 ```
 
@@ -133,7 +133,7 @@ all_proxy
 
 ```text
 REDIS_URL
-REDIS_KEY_PREFIX=jjob/tools102-boss-hire-tag/state
+REDIS_KEY_PREFIX=jjob:tools102-boss-hire-tag:state
 ```
 
 如需代理，也可以配置：
