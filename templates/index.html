@@ -6,6 +6,7 @@
     <title>简历投递公司标记</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v={{ app_version }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="app-shell">
@@ -38,16 +39,29 @@
                 <div class="feature-group is-open" data-feature-group="hire">
                     <button type="button" class="feature-tab active" data-feature="hire" id="tabHire">
                         <strong>投递登记</strong>
-                        <span>按招聘渠道</span>
+                        <span>投过简历正在进度中的企业</span>
                     </button>
                     <div class="feature-subrail" id="hireSubrail" role="tablist" aria-label="招聘渠道"></div>
                 </div>
                 <div class="feature-group" data-feature-group="blacklist">
                     <button type="button" class="feature-tab" data-feature="blacklist" id="tabBlacklist">
-                        <strong>企业黑名单</strong>
-                        <span>添加与查询</span>
+                        <strong>忽略企业</strong>
+                        <span>进行中失败的企业</span>
                     </button>
                     <div class="feature-subrail" id="blacklistSubrail" role="tablist" aria-label="招聘渠道"></div>
+                </div>
+                <div class="feature-group" data-feature-group="blocklist">
+                    <button type="button" class="feature-tab" data-feature="blocklist" id="tabBlocklist">
+                        <strong>黑名单企业</strong>
+                        <span>永不联系的企业</span>
+                    </button>
+                </div>
+                <div class="feature-group" data-feature-group="jobUpdates">
+                    <button type="button" class="feature-tab" data-feature="jobUpdates" id="tabJobUpdates">
+                        <strong>更新企业</strong>
+                        <span>招聘平台岗位采集</span>
+                    </button>
+                    <div class="feature-subrail" id="jobUpdatesSubrail" role="tablist" aria-label="招聘渠道"></div>
                 </div>
             </nav>
 
@@ -95,72 +109,73 @@
                         <button class="btn btn-sm btn-outline-success ms-auto" id="refreshCompaniesBtn">刷新列表</button>
                     </div>
 
-                    <main class="workspace">
-            <div class="resize-handle" id="workspaceResizeHandle"></div>
-            <section class="side-panel">
+                    <main class="workspace workspace-with-tabs">
+            <div class="workspace-tabrail" role="tablist" aria-label="登记工作区">
+                <button type="button" class="workspace-tab" data-workspace-tab="form" role="tab" aria-selected="false" id="workspaceTabForm">新增</button>
+                <button type="button" class="workspace-tab active" data-workspace-tab="list" role="tab" aria-selected="true" id="workspaceTabList">列表</button>
+            </div>
+            <div class="workspace-tab-body">
+            <section class="side-panel" data-workspace-panel="form" hidden>
                 <div class="panel-title">
                     <h2>新增记录</h2>
                     <span id="lastUpdatedAt">-</span>
                 </div>
-                <form id="companyForm" class="record-form">
-                    <label>
-                        <span>企业名称</span>
-                        <input id="companyNameInput" class="form-control" autocomplete="off" required>
-                    </label>
-                    <label>
-                        <span>交流状态</span>
-                        <select id="effectStatusInput" class="form-select">
-                            <option value="">请选择交流状态</option>
-                        </select>
-                    </label>
-                    <label>
-                        <span>行业</span>
-                        <select id="industryInput" class="form-select">
-                            <option value="">请选择行业</option>
-                        </select>
-                    </label>
-                    <div class="grid-two">
-                        <label>
-                            <span>是否是猎头</span>
+                <form id="companyForm" class="record-form record-form-wide">
+                    <div class="form-row form-row-main">
+                        <label class="field-grow">
+                            <span>企业名称</span>
+                            <input id="companyNameInput" class="form-control" autocomplete="off" required>
+                        </label>
+                        <label class="field-md">
+                            <span>交流状态</span>
+                            <select id="effectStatusInput" class="form-select">
+                                <option value="">请选择交流状态</option>
+                            </select>
+                        </label>
+                        <label class="field-md">
+                            <span>行业</span>
+                            <select id="industryInput" class="form-select">
+                                <option value="">请选择行业</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="form-row form-row-flags">
+                        <label class="field-sm">
+                            <span>猎头</span>
                             <select id="hunterInput" class="form-select">
                                 <option value="unknown">未标记</option>
                                 <option value="yes">是</option>
                                 <option value="no">否</option>
                             </select>
                         </label>
-                        <label>
-                            <span>是否是外包</span>
+                        <label class="field-sm">
+                            <span>外包</span>
                             <select id="outsourcedInput" class="form-select">
                                 <option value="unknown">未标记</option>
                                 <option value="yes">是</option>
                                 <option value="no">否</option>
                             </select>
                         </label>
+                        <label class="field-sm">
+                            <span>已面试</span>
+                            <select id="interviewedInput" class="form-select">
+                                <option value="unknown">未标记</option>
+                                <option value="yes">是</option>
+                                <option value="no">否</option>
+                            </select>
+                        </label>
                     </div>
-                    <label>
-                        <span>是否已面试</span>
-                        <select id="interviewedInput" class="form-select">
-                            <option value="unknown">未标记</option>
-                            <option value="yes">是</option>
-                            <option value="no">否</option>
-                        </select>
-                    </label>
-                    <label>
+                    <label class="field-note">
                         <span>备注</span>
-                        <textarea id="noteInput" class="form-control" rows="3" placeholder="联系人、渠道、下一步动作"></textarea>
+                        <textarea id="noteInput" class="form-control" rows="2" placeholder="联系人、渠道、下一步动作"></textarea>
                     </label>
-                    <button class="btn btn-primary w-100" id="submitButton" type="submit">保存记录</button>
-                    <button class="btn btn-outline-secondary w-100 d-none" id="cancelEditButton" type="button">取消编辑</button>
+                    <div class="form-actions">
+                        <button class="btn btn-primary" id="submitButton" type="submit">保存记录</button>
+                        <button class="btn btn-outline-secondary d-none" id="cancelEditButton" type="button">取消编辑</button>
+                    </div>
                 </form>
 
-                <div class="import-box">
-                    <div class="panel-title compact">
-                        <h2>批量粘贴</h2>
-                    </div>
-                    <textarea id="bulkImportInput" class="form-control" rows="7" placeholder="从 Excel 复制表格行，列顺序：企业名称、交流状态、行业、是否是猎头、是否是外包、是否已面试、备注"></textarea>
-                    <button class="btn btn-outline-primary w-100" id="importButton" type="button">导入 / 更新</button>
-                </div>
-
+                <div class="form-secondary-grid">
                 <div class="config-box">
                     <div class="panel-title compact">
                         <h2>可配置选项</h2>
@@ -189,9 +204,10 @@
                         <div id="industryChips" class="chip-list"></div>
                     </div>
                 </div>
+                </div>
             </section>
 
-            <section class="table-panel">
+            <section class="table-panel is-active" data-workspace-panel="list">
                 <div class="tools">
                     <div class="search-group">
                         <input id="searchInput" class="form-control" placeholder="搜索公司、状态、行业、备注">
@@ -269,45 +285,59 @@
                     </div>
                 </div>
             </section>
+            </div>
         </main>
                     </div>
                 </section>
 
                 <section class="feature-panel" id="panelBlacklist" data-feature="blacklist" hidden>
                     <header class="channel-page-head">
-                        <span class="channel-page-kicker">企业黑名单</span>
+                        <span class="channel-page-kicker">忽略企业</span>
                         <h1 class="channel-page-title" id="blacklistPageTitle">boss</h1>
                     </header>
-                    <div class="blacklist-layout">
-                        <aside class="blacklist-side">
+                    <div class="blacklist-layout workspace-with-tabs" id="blacklistWorkspace">
+                        <div class="workspace-tabrail" role="tablist" aria-label="忽略企业工作区">
+                            <button type="button" class="workspace-tab" data-workspace-tab="form" role="tab" aria-selected="false" id="blacklistTabForm">新增</button>
+                            <button type="button" class="workspace-tab active" data-workspace-tab="list" role="tab" aria-selected="true" id="blacklistTabList">列表</button>
+                        </div>
+                        <div class="workspace-tab-body">
+                        <aside class="blacklist-side" data-workspace-panel="form" hidden>
                             <div class="panel-title">
-                                <h2>加入黑名单</h2>
+                                <h2>加入忽略</h2>
                                 <span id="blacklistLastUpdated">-</span>
                             </div>
                             <form id="blacklistForm" class="record-form">
                                 <label>
                                     <span>企业名称</span>
-                                    <input id="blacklistNameInput" class="form-control" autocomplete="off" required placeholder="输入要拉黑的企业">
+                                    <input id="blacklistNameInput" class="form-control" autocomplete="off" required placeholder="输入要忽略的企业">
                                 </label>
                                 <label>
-                                    <span>拉黑原因</span>
-                                    <textarea id="blacklistReasonInput" class="form-control" rows="4" placeholder="例如：虚假岗位、骚扰候选人、拖欠薪资等"></textarea>
+                                    <span>忽略原因</span>
+                                    <textarea id="blacklistReasonInput" class="form-control" rows="4" placeholder="例如：虚假岗位、骚扰候选人、不合适等"></textarea>
                                 </label>
-                                <button class="btn btn-danger w-100" id="blacklistSubmitBtn" type="submit">加入黑名单</button>
+                                <button class="btn btn-danger w-100" id="blacklistSubmitBtn" type="submit">加入忽略</button>
                                 <button class="btn btn-outline-secondary w-100 d-none" id="blacklistCancelBtn" type="button">取消编辑</button>
                             </form>
                             <div class="blacklist-summary">
-                                <span>黑名单企业</span>
+                                <span>忽略企业</span>
                                 <strong id="blacklistCount">0</strong>
                             </div>
                         </aside>
-                        <section class="table-panel blacklist-table-panel">
+                        <section class="table-panel blacklist-table-panel is-active" data-workspace-panel="list">
                             <div class="tools">
                                 <div class="search-group">
-                                    <input id="blacklistSearchInput" class="form-control" placeholder="搜索企业名称或拉黑原因">
+                                    <input id="blacklistSearchInput" class="form-control" placeholder="搜索企业名称或忽略原因">
                                     <button class="btn btn-outline-primary" id="blacklistSearchBtn" type="button">查询</button>
                                     <button class="btn btn-outline-secondary" id="blacklistRefreshBtn" type="button">刷新</button>
                                 </div>
+                                <div class="action-group">
+                                    <button class="btn btn-outline-primary" id="blacklistBackupBtn" type="button">下载备份</button>
+                                    <button class="btn btn-outline-primary" id="blacklistImportBtn" type="button">导入备份</button>
+                                    <button class="btn btn-outline-danger" id="blacklistImportOverwriteBtn" type="button">导入并覆盖</button>
+                                    <button class="btn btn-outline-danger" id="blacklistClearBtn" type="button">清空记录</button>
+                                    <button class="btn btn-outline-secondary" id="blacklistExportCsvBtn" type="button">导出 CSV</button>
+                                </div>
+                                <input type="file" id="blacklistImportFileInput" accept=".json,.csv" class="d-none">
                             </div>
                             <div class="table-wrap">
                                 <table class="table align-middle mb-0" id="blacklistTable">
@@ -316,15 +346,304 @@
                                             <th>企业名称</th>
                                             <th>更新时间</th>
                                             <th>操作</th>
-                                            <th>拉黑原因</th>
+                                            <th>忽略原因</th>
                                         </tr>
                                     </thead>
                                     <tbody id="blacklistTableBody">
+                                        <tr><td colspan="4" class="empty-cell">暂无忽略企业记录</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="feature-panel" id="panelBlocklist" data-feature="blocklist" hidden>
+                    <header class="channel-page-head">
+                        <span class="channel-page-kicker">黑名单企业</span>
+                        <h1 class="channel-page-title">黑名单企业</h1>
+                    </header>
+                    <div class="blacklist-layout workspace-with-tabs" id="blocklistWorkspace">
+                        <div class="workspace-tabrail" role="tablist" aria-label="黑名单工作区">
+                            <button type="button" class="workspace-tab" data-workspace-tab="form" role="tab" aria-selected="false" id="blocklistTabForm">新增</button>
+                            <button type="button" class="workspace-tab active" data-workspace-tab="list" role="tab" aria-selected="true" id="blocklistTabList">列表</button>
+                        </div>
+                        <div class="workspace-tab-body">
+                        <aside class="blacklist-side" data-workspace-panel="form" hidden>
+                            <div class="panel-title">
+                                <h2>加入黑名单</h2>
+                                <span id="blocklistLastUpdated">-</span>
+                            </div>
+                            <form id="blocklistForm" class="record-form">
+                                <label>
+                                    <span>企业名称</span>
+                                    <input id="blocklistNameInput" class="form-control" autocomplete="off" required placeholder="输入要拉黑的企业">
+                                </label>
+                                <label>
+                                    <span>拉黑原因</span>
+                                    <textarea id="blocklistReasonInput" class="form-control" rows="4" placeholder="例如：骗子公司、恶意骚扰、明确永不联系等"></textarea>
+                                </label>
+                                <button class="btn btn-danger w-100" id="blocklistSubmitBtn" type="submit">加入黑名单</button>
+                                <button class="btn btn-outline-secondary w-100 d-none" id="blocklistCancelBtn" type="button">取消编辑</button>
+                            </form>
+                            <div class="blacklist-summary">
+                                <span>黑名单企业</span>
+                                <strong id="blocklistCount">0</strong>
+                            </div>
+                        </aside>
+                        <section class="table-panel blacklist-table-panel is-active" data-workspace-panel="list">
+                            <div class="tools">
+                                <div class="search-group">
+                                    <input id="blocklistSearchInput" class="form-control" placeholder="搜索企业名称或拉黑原因">
+                                    <button class="btn btn-outline-primary" id="blocklistSearchBtn" type="button">查询</button>
+                                    <button class="btn btn-outline-secondary" id="blocklistRefreshBtn" type="button">刷新</button>
+                                </div>
+                                <div class="action-group">
+                                    <button class="btn btn-outline-primary" id="blocklistBackupBtn" type="button">下载备份</button>
+                                    <button class="btn btn-outline-primary" id="blocklistImportBtn" type="button">导入备份</button>
+                                    <button class="btn btn-outline-danger" id="blocklistImportOverwriteBtn" type="button">导入并覆盖</button>
+                                    <button class="btn btn-outline-danger" id="blocklistClearBtn" type="button">清空记录</button>
+                                    <button class="btn btn-outline-secondary" id="blocklistExportCsvBtn" type="button">导出 CSV</button>
+                                </div>
+                                <input type="file" id="blocklistImportFileInput" accept=".json,.csv" class="d-none">
+                            </div>
+                            <div class="table-wrap">
+                                <table class="table align-middle mb-0" id="blocklistTable">
+                                    <thead>
+                                        <tr>
+                                            <th>企业名称</th>
+                                            <th>更新时间</th>
+                                            <th>操作</th>
+                                            <th>拉黑原因</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="blocklistTableBody">
                                         <tr><td colspan="4" class="empty-cell">暂无黑名单记录</td></tr>
                                     </tbody>
                                 </table>
                             </div>
                         </section>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="feature-panel" id="panelJobUpdates" data-feature="jobUpdates" hidden>
+                    <header class="channel-page-head">
+                        <span class="channel-page-kicker">更新企业</span>
+                        <h1 class="channel-page-title" id="jobUpdatesPageTitle">boss</h1>
+                    </header>
+                    <div class="metrics">
+                        <article class="metric-card metric-total">
+                            <span class="metric-label">采集岗位数</span>
+                            <strong class="metric-value" id="jobUpdateCount">0</strong>
+                        </article>
+                        <article class="metric-card metric-follow">
+                            <span class="metric-label">最近更新</span>
+                            <strong class="metric-value metric-value-sm" id="jobUpdateLastUpdated">-</strong>
+                        </article>
+                    </div>
+                    <div class="hire-toolbar job-updates-toolbar" id="jobUpdatesToolbar">
+                        <span class="proxy-label">更新时间</span>
+                        <button class="btn btn-sm btn-outline-secondary job-updates-time-btn active" type="button" data-filter="all">全部</button>
+                        <button class="btn btn-sm btn-outline-secondary job-updates-time-btn" type="button" data-filter="day_before_yesterday">前天</button>
+                        <button class="btn btn-sm btn-outline-secondary job-updates-time-btn" type="button" data-filter="yesterday">昨天</button>
+                        <button class="btn btn-sm btn-outline-secondary job-updates-time-btn" type="button" data-filter="today">今天</button>
+                        <div id="jobUpdatesRangePicker" class="dtrp-host" title="选择日期和时间范围"></div>
+                    </div>
+                    <div class="blacklist-layout workspace-with-tabs" id="jobUpdatesWorkspace">
+                        <div class="workspace-tabrail" role="tablist" aria-label="更新企业工作区">
+                            <button type="button" class="workspace-tab active" data-workspace-tab="list" role="tab" aria-selected="true" id="jobUpdatesTabList">列表</button>
+                            <button type="button" class="workspace-tab" data-workspace-tab="stats" role="tab" aria-selected="false" id="jobUpdatesTabStats">统计</button>
+                            <button type="button" class="workspace-tab" data-workspace-tab="help" role="tab" aria-selected="false" id="jobUpdatesTabHelp">帮助</button>
+                        </div>
+                        <div class="workspace-tab-body">
+                            <section class="table-panel is-active" data-workspace-panel="list">
+                                <div class="tools">
+                                    <div class="search-group">
+                                        <input id="jobUpdatesSearchInput" class="form-control" placeholder="搜索企业 / 岗位 / 地点 / 简介">
+                                        <button class="btn btn-outline-primary" id="jobUpdatesSearchBtn" type="button">查询</button>
+                                        <button class="btn btn-outline-secondary" id="jobUpdatesRefreshBtn" type="button">刷新</button>
+                                    </div>
+                                    <div class="action-group">
+                                        <button class="btn btn-outline-danger" id="jobUpdatesClearBtn" type="button">清空本渠道</button>
+                                    </div>
+                                </div>
+                                <div class="table-wrap">
+                                    <table class="table align-middle mb-0" id="jobUpdatesTable">
+                                        <thead>
+                                            <tr>
+                                                <th>企业名称</th>
+                                                <th>岗位名称</th>
+                                                <th>薪资范围</th>
+                                                <th>地点地址</th>
+                                                <th>职位描述简介</th>
+                                                <th>更新时间</th>
+                                                <th>操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="jobUpdatesTableBody">
+                                            <tr><td colspan="7" class="empty-cell">暂无采集数据，请通过 API 写入</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                            <section class="table-panel job-updates-stats-panel" data-workspace-panel="stats" hidden>
+                                <div class="job-updates-stats-mode" role="tablist" aria-label="统计类型">
+                                    <button type="button" class="job-updates-stats-mode-btn active" data-stats-mode="title" role="tab" aria-selected="true">岗位</button>
+                                    <button type="button" class="job-updates-stats-mode-btn" data-stats-mode="salary" role="tab" aria-selected="false">薪资</button>
+                                </div>
+                                <div class="tools job-updates-stats-tools" id="jobUpdatesStatsTitleTools">
+                                    <div class="search-group job-updates-title-filter">
+                                        <span class="proxy-label">岗位筛选</span>
+                                        <button class="btn btn-sm btn-outline-secondary" id="jobUpdatesSelectAllTitlesBtn" type="button">全选</button>
+                                        <button class="btn btn-sm btn-outline-secondary" id="jobUpdatesClearTitlesBtn" type="button">清空</button>
+                                    </div>
+                                </div>
+                                <div class="tools job-updates-stats-tools" id="jobUpdatesStatsSalaryTools" hidden>
+                                    <div class="search-group job-updates-title-filter">
+                                        <span class="proxy-label">薪资区间</span>
+                                        <button class="btn btn-sm btn-outline-secondary" id="jobUpdatesSelectAllSalaryBtn" type="button">全选</button>
+                                        <button class="btn btn-sm btn-outline-secondary" id="jobUpdatesClearSalaryBtn" type="button">清空</button>
+                                    </div>
+                                </div>
+                                <div id="jobUpdatesTitleChips" class="chip-list job-updates-title-chips"></div>
+                                <div id="jobUpdatesSalaryChips" class="chip-list job-updates-title-chips" hidden></div>
+                                <div class="job-updates-chart-wrap">
+                                    <canvas id="jobUpdatesChart" height="120"></canvas>
+                                    <p id="jobUpdatesChartEmpty" class="empty-cell d-none">请选择至少一个岗位，或先采集数据</p>
+                                </div>
+                            </section>
+                            <section class="table-panel job-updates-help-panel" data-workspace-panel="help" hidden>
+                                <article class="api-help">
+                                    <header class="api-help-hero">
+                                        <div>
+                                            <p class="api-help-kicker">岗位采集接口</p>
+                                            <h2>如何把招聘平台岗位写入「更新企业」</h2>
+                                            <p class="api-help-lead">登录账号后携带 Token 调用 HTTP API。同渠道下「企业名 + 岗位名」唯一，重复提交会覆盖更新。</p>
+                                        </div>
+                                        <div class="api-help-flow" aria-hidden="true">
+                                            <div class="api-help-flow-step"><span>1</span><em>登录拿 Token</em></div>
+                                            <div class="api-help-flow-arrow"></div>
+                                            <div class="api-help-flow-step"><span>2</span><em>POST 写入岗位</em></div>
+                                            <div class="api-help-flow-arrow"></div>
+                                            <div class="api-help-flow-step"><span>3</span><em>列表 / 统计查看</em></div>
+                                        </div>
+                                    </header>
+
+                                    <section class="api-help-section">
+                                        <h3>鉴权</h3>
+                                        <p>先登录拿到 <code>token</code>，之后每个请求在 Header 里带上：</p>
+                                        <pre class="api-help-code" id="jobUpdatesHelpHeaders">Authorization: Bearer &lt;你的 token&gt;
+Content-Type: application/json</pre>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary api-help-copy" data-copy-target="jobUpdatesHelpHeaders">复制 Header</button>
+                                        <p class="api-help-note">Token 来自登录接口 <code>POST /api/auth/login</code> 的返回字段，或浏览器登录后本地已保存的会话。</p>
+                                    </section>
+
+                                    <section class="api-help-section">
+                                        <h3>字段说明</h3>
+                                        <div class="api-help-fields">
+                                            <div class="api-help-field is-required"><strong>channel</strong><span>招聘渠道，如 boss / liepin</span></div>
+                                            <div class="api-help-field is-required"><strong>company_name</strong><span>企业名称</span></div>
+                                            <div class="api-help-field is-required"><strong>job_title</strong><span>岗位名称</span></div>
+                                            <div class="api-help-field"><strong>salary_min</strong><span>薪资最低（可选，数字，建议单位 K）</span></div>
+                                            <div class="api-help-field"><strong>salary_max</strong><span>薪资最高（可选，数字，建议单位 K）</span></div>
+                                            <div class="api-help-field"><strong>location</strong><span>地点地址（可选）</span></div>
+                                            <div class="api-help-field"><strong>job_summary</strong><span>职位简介（可选）</span></div>
+                                        </div>
+                                        <p class="api-help-note">薪资示例：<code>salary_min: 15</code>、<code>salary_max: 25</code> 表示 15-25K；也可传字符串 <code>"15k"</code>。若最低高于最高，服务端会自动对调。</p>
+                                        <div class="api-help-unique">
+                                            <strong>唯一键</strong>
+                                            <span>同一账号、同一 <code>channel</code> 下，对 <code>company_name + job_title</code>（忽略大小写）做哈希得到记录 ID。再次提交相同组合 → 更新；新组合 → 新增。</span>
+                                        </div>
+                                    </section>
+
+                                    <section class="api-help-section">
+                                        <h3>单条写入</h3>
+                                        <p><code>POST /api/job-updates</code></p>
+                                        <pre class="api-help-code" id="jobUpdatesHelpSingle">{
+  "channel": "boss",
+  "company_name": "星云互娱",
+  "job_title": "前端开发（React）",
+  "salary_min": 15,
+  "salary_max": 25,
+  "location": "深圳·南山区",
+  "job_summary": "参与企业投递台页面迭代，要求熟悉组件化与交互联调。"
+}</pre>
+                                        <div class="api-help-actions">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-copy-target="jobUpdatesHelpSingle">复制 JSON</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-copy-curl="single">复制 curl</button>
+                                        </div>
+                                        <pre class="api-help-code api-help-code-soft" id="jobUpdatesHelpSingleCurl">curl -X POST "http://127.0.0.1:9212/api/job-updates" \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -H "Content-Type: application/json" \
+  -d "{\"channel\":\"boss\",\"company_name\":\"星云互娱\",\"job_title\":\"前端开发（React）\",\"salary_min\":15,\"salary_max\":25,\"location\":\"深圳·南山区\",\"job_summary\":\"参与企业投递台页面迭代\"}"</pre>
+                                    </section>
+
+                                    <section class="api-help-section">
+                                        <h3>批量写入</h3>
+                                        <p><code>POST /api/job-updates/batch</code>，body 里放 <code>items</code> 数组（也兼容 <code>data</code>）。顶层 <code>channel</code> 可作为默认渠道。</p>
+                                        <pre class="api-help-code" id="jobUpdatesHelpBatch">{
+  "channel": "boss",
+  "items": [
+    {
+      "company_name": "示例科技有限公司",
+      "job_title": "Python 后端工程师",
+      "salary_min": 20,
+      "salary_max": 35,
+      "location": "上海·浦东新区",
+      "job_summary": "负责招聘工具后端接口开发与 Redis 数据落库。"
+    },
+    {
+      "company_name": "星云互娱",
+      "job_title": "前端开发（React）",
+      "salary_min": 15,
+      "salary_max": 25,
+      "location": "深圳·南山区"
+    }
+  ]
+}</pre>
+                                        <div class="api-help-actions">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-copy-target="jobUpdatesHelpBatch">复制 JSON</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-copy-curl="batch">复制 curl</button>
+                                        </div>
+                                        <pre class="api-help-code api-help-code-soft" id="jobUpdatesHelpBatchCurl">curl -X POST "http://127.0.0.1:9212/api/job-updates/batch" \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -H "Content-Type: application/json" \
+  -d "{\"channel\":\"boss\",\"items\":[{\"company_name\":\"示例科技有限公司\",\"job_title\":\"Python 后端工程师\",\"salary_min\":20,\"salary_max\":35}]}"</pre>
+                                        <p class="api-help-note">返回会汇总：新增 / 更新 / 跳过 条数。</p>
+                                    </section>
+
+                                    <section class="api-help-section">
+                                        <h3>查询与删除</h3>
+                                        <div class="api-help-endpoint-list">
+                                            <div><code>GET /api/job-updates?channel=boss&amp;q=关键词</code><span>列表查询，可加 time_filter / from_ts / to_ts</span></div>
+                                            <div><code>DELETE /api/job-updates/&lt;id&gt;?channel=boss</code><span>删除单条</span></div>
+                                            <div><code>POST /api/job-updates/clear</code><span>清空（body 传 channel）</span></div>
+                                        </div>
+                                    </section>
+
+                                    <section class="api-help-section api-help-section-last">
+                                        <h3>成功响应示例</h3>
+                                        <pre class="api-help-code">{
+  "message": "已新增岗位采集",
+  "created": true,
+  "item": {
+    "id": "a1b2c3…",
+    "channel": "boss",
+    "company_name": "星云互娱",
+    "job_title": "前端开发（React）",
+    "salary_min": 15,
+    "salary_max": 25,
+    "location": "深圳·南山区",
+    "job_summary": "…",
+    "updated_at": "2026-09-28T13:33:11+00:00"
+  }
+}</pre>
+                                    </section>
+                                </article>
+                            </section>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -354,19 +673,27 @@
 
     <div id="clearCompaniesModal" class="login-gate d-none" style="display:none;">
         <div class="login-card clear-confirm-card">
-            <h2>清空当前账号记录</h2>
+            <h2>清空当前渠道记录</h2>
             <div class="clear-confirm-warning">
                 <p><strong>此操作不可撤销。</strong></p>
                 <ul>
-                    <li>将删除：当前登录账号下的<strong>全部公司投递记录</strong></li>
+                    <li>将删除：当前招聘渠道下的<strong>全部公司投递记录</strong></li>
+                    <li>不会删除：其他招聘渠道的记录</li>
                     <li>不会删除：左侧「交流状态」「行业」的<strong>自定义标签</strong></li>
                     <li>不会删除：账号本身及其他账号的数据</li>
                 </ul>
-                <p>请先下载备份后再清空。若确定继续，请在下方输入：<code>确认清空</code></p>
+                <p>请先下载本渠道备份后再清空。确认前请完成下方验算。</p>
             </div>
-            <label>确认文字
-                <input id="clearConfirmInput" class="form-control" autocomplete="off" placeholder="确认清空">
-            </label>
+            <div class="clear-confirm-math">
+                <div class="clear-confirm-math-q">
+                    <span class="proxy-label">验算确认</span>
+                    <strong id="clearConfirmChallenge">? + ? = ?</strong>
+                    <button class="btn btn-sm btn-outline-secondary" id="refreshClearConfirmBtn" type="button" title="换一题">换一题</button>
+                </div>
+                <label class="clear-confirm-math-a">答案
+                    <input id="clearConfirmInput" class="form-control" inputmode="numeric" autocomplete="off" placeholder="输入计算结果">
+                </label>
+            </div>
             <div class="clear-confirm-actions">
                 <button class="btn btn-outline-secondary" id="cancelClearCompaniesBtn" type="button">取消</button>
                 <button class="btn btn-danger" id="confirmClearCompaniesBtn" type="button" disabled>确认清空</button>
@@ -393,7 +720,7 @@
                 <div class="table-wrap">
                     <table class="table table-sm align-middle">
                         <thead>
-                            <tr><th>账号</th><th>角色</th><th>登记数</th><th>黑名单</th><th>各渠道</th></tr>
+                            <tr><th>账号</th><th>角色</th><th>登记数</th><th>忽略企业</th><th>各渠道</th></tr>
                         </thead>
                         <tbody id="adminSummaryBody"></tbody>
                     </table>
@@ -452,6 +779,19 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/shared/state.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/shared/http.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/shared/dom.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/shared/datetime_range_picker.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/channels.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/hire.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/blacklist.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/blocklist.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/job_updates.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/job_updates_stats.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/proxy.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/auth.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/admin.js') }}?v={{ app_version }}"></script>
+    <script src="{{ url_for('static', filename='js/boot.js') }}?v={{ app_version }}"></script>
 </body>
 </html>

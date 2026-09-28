@@ -148,7 +148,7 @@ class RedisStorage:
 
     @property
     def _legacy_companies_key(self) -> str:
-        """黑名单旧 key：…:blacklist:companies；新 key：…:blacklist:items。"""
+        """忽略企业旧 key：…:blacklist:companies / …:ignored:companies；新 key：…:ignored:items。"""
         return f"{self.key_prefix}:companies"
 
     def _migrate_blacklist_hash_if_needed(self) -> None:

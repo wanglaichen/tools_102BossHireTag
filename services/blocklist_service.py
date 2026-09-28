@@ -1,34 +1,30 @@
+"""账号级黑名单企业（与忽略企业 ignored 完全隔离，无渠道维度）。"""
+from __future__ import annotations
+
 import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from services.channel_service import normalize_channel_id
 from services.storage import JsonStorage, RedisStorage
-
 
 FIELD_LIMITS = {
     "company_name": 120,
     "reason": 500,
 }
 
-DEFAULT_CHANNEL = "boss"
-BACKUP_TYPE = "tools102-boss-hire-tag-ignored-backup"
-BACKUP_TYPE_LEGACY = "tools102-boss-hire-tag-blacklist-backup"
+BACKUP_TYPE = "tools102-boss-hire-tag-blocklist-backup"
 BACKUP_SCHEMA_VERSION = 1
 
 
-class BlacklistService:
-    """按账号隔离的忽略企业（原黑名单）。"""
+class BlocklistService:
+    """永不联系的黑名单企业；按账号隔离，不按招聘渠道拆分。"""
 
     def __init__(self, storage: JsonStorage | RedisStorage) -> None:
         self.storage = storage
 
-    def list_items(self, keyword: str = "", channel: str | None = None) -> list[dict[str, Any]]:
+    def list_items(self, keyword: str = "") -> list[dict[str, Any]]:
         items = list(self._read_state().get("items") or [])
-        channel_id = self._normalize_channel(channel) if channel else None
-        if channel_id:
-            items = [item for item in items if self._item_channel(item) == channel_id]
         text = (keyword or "").strip().casefold()
         if text:
             items = [
@@ -43,15 +39,13 @@ class BlacklistService:
         company_name = self._clean_text(payload.get("company_name"), FIELD_LIMITS["company_name"])
         if not company_name:
             raise ValueError("企业名称不能为空")
-        channel = self._normalize_channel(payload.get("channel"))
         data = self._read_state()
-        if self._find_by_name(data["items"], company_name, channel=channel):
-            raise ValueError("当前渠道下该企业已在忽略列表中")
+        if self._find_by_name(data["items"], company_name):
+            raise ValueError("该企业已在黑名单中")
         now = self._now()
         record = {
             "id": str(uuid.uuid4()),
             "company_name": company_name,
-            "channel": channel,
             "reason": self._clean_text(payload.get("reason"), FIELD_LIMITS["reason"]),
             "created_at": now,
             "updated_at": now,
@@ -66,19 +60,16 @@ class BlacklistService:
         record = self._find_by_id(data["items"], item_id)
         if not record:
             raise ValueError("记录不存在")
-        channel = self._normalize_channel(payload.get("channel") if "channel" in payload else record.get("channel"))
         if "company_name" in payload:
             company_name = self._clean_text(payload.get("company_name"), FIELD_LIMITS["company_name"])
             if not company_name:
                 raise ValueError("企业名称不能为空")
-            existing = self._find_by_name(data["items"], company_name, channel=channel)
+            existing = self._find_by_name(data["items"], company_name)
             if existing and existing.get("id") != item_id:
-                raise ValueError("当前渠道下该企业已在忽略列表中")
+                raise ValueError("该企业已在黑名单中")
             record["company_name"] = company_name
         if "reason" in payload:
             record["reason"] = self._clean_text(payload.get("reason"), FIELD_LIMITS["reason"])
-        if "channel" in payload:
-            record["channel"] = channel
         record["updated_at"] = self._now()
         data["meta"]["last_changed_at"] = record["updated_at"]
         self._save_item(data, record)
@@ -97,108 +88,86 @@ class BlacklistService:
             self.storage.write(self._to_storage_shape(data))
         return {"deleted": True, "id": item_id}
 
-    def get_summary(self, channel: str | None = None) -> dict[str, Any]:
-        items = self.list_items(channel=channel)
-        count = len(items)
+    def get_summary(self) -> dict[str, Any]:
+        items = self.list_items()
         return {
-            "ignored_count": count,
-            "blacklist_count": count,  # 兼容旧前端字段
-            "channel": self._normalize_channel(channel) if channel else "",
+            "blocklist_count": len(items),
             "last_updated_at": (self._read_state().get("meta") or {}).get("last_changed_at") or "",
         }
 
-    def export_backup(self, *, account: dict[str, Any] | None = None, channel: str | None = None) -> dict[str, Any]:
-        channel_id = self._normalize_channel(channel) if channel else None
-        items = self.list_items(channel=channel_id)
+    def clear_items(self) -> dict[str, Any]:
+        data = self._read_state()
+        items = list(data.get("items") or [])
+        cleared_count = len(items)
+        base_ids = [str(item.get("id")) for item in items if item.get("id")]
+        now = self._now()
+        data["items"] = []
+        data["meta"]["last_changed_at"] = now
+        data["meta"]["cleared_at"] = now
+        self.storage.write(self._to_storage_shape(data), replace=True, base_ids=base_ids)
+        return {
+            "cleared_count": cleared_count,
+            "items": self.list_items(),
+            "summary": self.get_summary(),
+        }
+
+    def export_backup(self, *, account: dict[str, Any] | None = None) -> dict[str, Any]:
+        items = self.list_items()
         payload = {
             "type": BACKUP_TYPE,
             "schema_version": BACKUP_SCHEMA_VERSION,
             "exported_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            "channel": channel_id or "",
             "items": items,
             "account": account or {},
         }
         username = str((account or {}).get("username") or "account")
         safe = "".join(ch for ch in username if ch.isalnum() or ch in "._-") or "account"
-        channel_tag = f"-{channel_id}" if channel_id else ""
         return {
             "payload": payload,
-            "filename": f"{safe}-ignored{channel_tag}-backup.json",
+            "filename": f"{safe}-blocklist-backup.json",
             "company_count": len(items),
-            "channel": channel_id or "",
-            "message": f"备份完成（{'渠道 ' + channel_id if channel_id else '全部渠道'}），共 {len(items)} 条忽略企业",
+            "message": f"备份完成，共 {len(items)} 条黑名单企业",
         }
 
-    def export_csv(self, channel: str | None = None) -> str:
+    def export_csv(self) -> str:
         import csv
         import io
 
-        channel_id = self._normalize_channel(channel) if channel else None
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["企业名称", "忽略原因", "渠道", "创建时间", "更新时间"])
-        for item in self.list_items(channel=channel_id):
+        writer.writerow(["企业名称", "拉黑原因", "创建时间", "更新时间"])
+        for item in self.list_items():
             writer.writerow(
                 [
                     item.get("company_name") or "",
                     item.get("reason") or "",
-                    self._item_channel(item),
                     item.get("created_at") or "",
                     item.get("updated_at") or "",
                 ]
             )
         return buf.getvalue()
 
-    def clear_items(self, channel: str | None = None) -> dict[str, Any]:
-        """清空忽略企业；传入 channel 时只清该渠道。"""
-        channel_id = self._normalize_channel(channel) if channel else None
-        data = self._read_state()
-        items = list(data.get("items") or [])
-        if channel_id:
-            kept = [item for item in items if self._item_channel(item) != channel_id]
-            removed = [item for item in items if self._item_channel(item) == channel_id]
-        else:
-            kept = []
-            removed = items
-        cleared_count = len(removed)
-        now = self._now()
-        data["items"] = kept
-        data["meta"]["last_changed_at"] = now
-        if channel_id:
-            data["meta"]["cleared_channel"] = channel_id
-        base_ids = [str(item.get("id")) for item in items if item.get("id")]
-        if hasattr(self.storage, "write"):
-            self.storage.write(self._to_storage_shape(data), replace=True, base_ids=base_ids)
-        return {
-            "cleared_count": cleared_count,
-            "channel": channel_id or "",
-            "items": self.list_items(channel=channel_id),
-            "summary": self.get_summary(channel=channel_id),
-        }
-
-    def import_backup(self, text: str, *, overwrite: bool = False, channel: str | None = None) -> dict[str, Any]:
+    def import_backup(self, text: str, *, overwrite: bool = False) -> dict[str, Any]:
         if not str(text or "").strip():
             raise ValueError("导入内容不能为空")
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise ValueError("忽略企业备份必须是 JSON") from exc
+            raise ValueError("黑名单备份必须是 JSON") from exc
 
-        allowed_types = {BACKUP_TYPE, BACKUP_TYPE_LEGACY}
-        if isinstance(payload, dict) and payload.get("type") and payload.get("type") not in allowed_types:
-            raise ValueError("不是有效的忽略企业备份文件")
+        if isinstance(payload, dict) and payload.get("type") and payload.get("type") != BACKUP_TYPE:
+            raise ValueError("不是有效的黑名单备份文件")
 
         if isinstance(payload, list):
             raw_items = payload
         elif isinstance(payload, dict):
             raw_items = payload.get("items") or payload.get("companies") or []
         else:
-            raise ValueError("忽略企业备份格式无效")
+            raise ValueError("黑名单备份格式无效")
 
         if not isinstance(raw_items, list):
-            raise ValueError("忽略企业备份缺少 items")
+            raise ValueError("黑名单备份缺少 items")
 
-        channel_id = self._normalize_channel(channel) if channel else None
         normalized: list[dict[str, Any]] = []
         for item in raw_items:
             if not isinstance(item, dict):
@@ -207,12 +176,10 @@ class BlacklistService:
             if not name:
                 continue
             now = self._now()
-            row_channel = channel_id or self._normalize_channel(item.get("channel"))
             normalized.append(
                 {
                     "id": str(item.get("id") or uuid.uuid4()),
                     "company_name": name,
-                    "channel": row_channel,
                     "reason": self._clean_text(item.get("reason"), FIELD_LIMITS["reason"]),
                     "created_at": str(item.get("created_at") or now),
                     "updated_at": str(item.get("updated_at") or now),
@@ -222,19 +189,15 @@ class BlacklistService:
         data = self._read_state()
         if overwrite:
             base_ids = [str(item.get("id")) for item in data["items"] if item.get("id")]
-            if channel_id:
-                kept = [item for item in data["items"] if self._item_channel(item) != channel_id]
-                data["items"] = kept + normalized
-            else:
-                data["items"] = normalized
+            data["items"] = normalized
             data["meta"]["last_changed_at"] = self._now()
             self.storage.write(self._to_storage_shape(data), replace=True, base_ids=base_ids)
             return {
                 "imported_count": len(normalized),
                 "updated_count": 0,
                 "skipped_count": 0,
-                "items": self.list_items(channel=channel_id),
-                "summary": self.get_summary(channel=channel_id),
+                "items": self.list_items(),
+                "summary": self.get_summary(),
             }
 
         imported_count = 0
@@ -242,10 +205,9 @@ class BlacklistService:
         skipped_count = 0
         now = self._now()
         for item in normalized:
-            existing = self._find_by_name(data["items"], item["company_name"], channel=item["channel"])
+            existing = self._find_by_name(data["items"], item["company_name"])
             if existing:
                 existing["reason"] = item["reason"]
-                existing["channel"] = item["channel"]
                 existing["updated_at"] = now
                 updated_count += 1
                 self._save_item(data, existing)
@@ -264,8 +226,8 @@ class BlacklistService:
             "imported_count": imported_count,
             "updated_count": updated_count,
             "skipped_count": skipped_count,
-            "items": self.list_items(channel=channel_id),
-            "summary": self.get_summary(channel=channel_id),
+            "items": self.list_items(),
+            "summary": self.get_summary(),
         }
 
     def _save_item(self, data: dict[str, Any], record: dict[str, Any]) -> None:
@@ -277,7 +239,6 @@ class BlacklistService:
     def _read_state(self) -> dict[str, Any]:
         raw = self.storage.read()
         companies = list(raw.get("companies") or [])
-        # 兼容存储层固定的 companies 字段，业务上叫 items
         items = list(raw.get("items") or companies)
         meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
         return {"items": items, "meta": meta}
@@ -294,29 +255,13 @@ class BlacklistService:
     def _find_by_id(items: list[dict[str, Any]], item_id: str) -> dict[str, Any] | None:
         return next((item for item in items if item.get("id") == item_id), None)
 
-    @classmethod
-    def _find_by_name(
-        cls, items: list[dict[str, Any]], company_name: str, channel: str | None = None
-    ) -> dict[str, Any] | None:
-        key = company_name.casefold()
-        channel_id = cls._normalize_channel(channel) if channel is not None else None
-        for item in items:
-            if str(item.get("company_name") or "").casefold() != key:
-                continue
-            if channel_id is not None and cls._item_channel(item) != channel_id:
-                continue
-            return item
-        return None
-
     @staticmethod
-    def _normalize_channel(value: Any) -> str:
-        return normalize_channel_id(str(value or "")) or DEFAULT_CHANNEL
-
-    @classmethod
-    def _item_channel(cls, item: dict[str, Any] | None) -> str:
-        if not item:
-            return DEFAULT_CHANNEL
-        return cls._normalize_channel(item.get("channel"))
+    def _find_by_name(items: list[dict[str, Any]], company_name: str) -> dict[str, Any] | None:
+        key = company_name.casefold()
+        for item in items:
+            if str(item.get("company_name") or "").casefold() == key:
+                return item
+        return None
 
     @staticmethod
     def _clean_text(value: Any, limit: int) -> str:

@@ -249,20 +249,29 @@ class CompanyService:
             self.storage.write(data)
         return {"deleted": True, "id": company_id}
 
-    def clear_companies(self) -> dict[str, Any]:
-        """清空当前账号全部公司记录，保留交流状态/行业等自定义标签。"""
+    def clear_companies(self, channel: str | None = None) -> dict[str, Any]:
+        """清空公司记录；传入 channel 时只清该渠道，否则清整账号。自定义标签始终保留。"""
+        channel_id = self._normalize_channel(channel) if channel else None
         data = self._read_state()
         companies = list(data.get("companies") or [])
-        cleared_count = len(companies)
+        if channel_id:
+            kept = [item for item in companies if self._item_channel(item) != channel_id]
+            removed = [item for item in companies if self._item_channel(item) == channel_id]
+        else:
+            kept = []
+            removed = companies
+        cleared_count = len(removed)
         base_ids = [str(item.get("id")) for item in companies if item.get("id")]
         now = self._now()
-        data["companies"] = []
+        data["companies"] = kept
         meta = data.setdefault("meta", {})
         if not isinstance(meta, dict):
             meta = {}
             data["meta"] = meta
         meta["last_changed_at"] = now
         meta["cleared_at"] = now
+        if channel_id:
+            meta["cleared_channel"] = channel_id
         # 故意不改 settings / status_options / industry_options
         self.storage.write(data, replace=True, base_ids=base_ids)
         if hasattr(self.storage, "primary") and hasattr(self.storage.primary, "rebuild_timestamps_index"):
@@ -277,8 +286,9 @@ class CompanyService:
                 pass
         return {
             "cleared_count": cleared_count,
-            "items": self.list_companies(),
-            "summary": self.get_summary(),
+            "channel": channel_id or "",
+            "items": self.list_companies(channel=channel_id),
+            "summary": self.get_summary(channel=channel_id),
         }
 
     def _save_record(self, data: dict[str, Any], record: dict[str, Any]) -> None:
@@ -295,8 +305,11 @@ class CompanyService:
         backup_payload = self._try_parse_structured_payload(text)
         if backup_payload is not None:
             if overwrite:
-                # 下载备份 + 导入并覆盖：完整替换当前账号公司与设置
-                restored = self.restore_backup(backup_payload)
+                if channel_id:
+                    restored = self.restore_backup(backup_payload, channel=channel_id)
+                else:
+                    # 管理中心：完整替换当前账号公司与设置
+                    restored = self.restore_backup(backup_payload)
                 return {
                     "imported_count": restored["restored_count"],
                     "updated_count": 0,
@@ -304,7 +317,7 @@ class CompanyService:
                     "items": restored["items"],
                     "summary": restored["summary"],
                 }
-            return self._merge_backup_companies(backup_payload)
+            return self._merge_backup_companies(backup_payload, channel=channel_id)
 
         text = self._coerce_import_text(text)
         data = self._read_state()
@@ -418,8 +431,9 @@ class CompanyService:
             return payload
         return None
 
-    def _merge_backup_companies(self, payload: Any) -> dict[str, Any]:
+    def _merge_backup_companies(self, payload: Any, channel: str | None = None) -> dict[str, Any]:
         companies_raw, settings_raw, _schema = self._extract_backup_parts(payload)
+        channel_id = self._normalize_channel(channel) if channel else None
         data = self._read_state()
         imported_count = 0
         updated_count = 0
@@ -433,7 +447,10 @@ class CompanyService:
             if not record:
                 skipped_count += 1
                 continue
-            existing = self._find_by_name(data["companies"], record["company_name"])
+            if channel_id:
+                record["channel"] = channel_id
+            row_channel = self._item_channel(record)
+            existing = self._find_by_name(data["companies"], record["company_name"], channel=row_channel)
             if existing:
                 keep_id = existing["id"]
                 keep_created = existing.get("created_at") or record.get("created_at") or now
@@ -441,6 +458,7 @@ class CompanyService:
                 existing["id"] = keep_id
                 existing["created_at"] = keep_created
                 existing["updated_at"] = now
+                existing["channel"] = row_channel
                 touched.append(existing)
                 merged_records.append(existing)
                 updated_count += 1
@@ -464,17 +482,18 @@ class CompanyService:
             "imported_count": imported_count,
             "updated_count": updated_count,
             "skipped_count": skipped_count,
-            "items": self.list_companies(),
-            "summary": self.get_summary(),
+            "items": self.list_companies(channel=channel_id),
+            "summary": self.get_summary(channel=channel_id),
         }
 
-    def export_csv(self) -> str:
+    def export_csv(self, channel: str | None = None) -> str:
+        channel_id = self._normalize_channel(channel) if channel else None
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(
-            ["企业名称", "交流状态", "行业", "是否是猎头", "是否是外包", "是否已面试", "备注", "创建时间", "更新时间"]
+            ["企业名称", "交流状态", "行业", "是否是猎头", "是否是外包", "是否已面试", "备注", "渠道", "创建时间", "更新时间"]
         )
-        for item in self.list_companies():
+        for item in self.list_companies(channel=channel_id):
             writer.writerow(
                 [
                     item.get("company_name", ""),
@@ -484,6 +503,7 @@ class CompanyService:
                     self._display_flag(item.get("is_outsourced")),
                     self._display_flag(item.get("is_interviewed")),
                     item.get("note", ""),
+                    self._item_channel(item),
                     item.get("created_at", ""),
                     item.get("updated_at", ""),
                 ]
@@ -496,12 +516,19 @@ class CompanyService:
         keep_count: int = 20,
         app_version: str = "",
         account: dict[str, Any] | None = None,
+        channel: str | None = None,
     ) -> dict[str, Any]:
-        """Create a portable full JSON backup on disk and return metadata + payload."""
+        """Create a portable JSON backup. With channel, only that channel's companies."""
         from pathlib import Path
 
+        channel_id = self._normalize_channel(channel) if channel else None
         state = self._read_state()
-        companies = list(state.get("companies") or [])
+        all_companies = list(state.get("companies") or [])
+        companies = (
+            [item for item in all_companies if self._item_channel(item) == channel_id]
+            if channel_id
+            else all_companies
+        )
         settings = self._build_backup_settings(companies)
         created_at = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         version_tag = "".join(ch for ch in (app_version or "unknown") if ch.isalnum() or ch in "._-") or "unknown"
@@ -516,7 +543,8 @@ class CompanyService:
         if account_info and account_info["username"]:
             safe = "".join(ch for ch in account_info["username"] if ch.isalnum() or ch in "._-") or "account"
             account_tag = f"_{safe}"
-        filename = f"backup_{version_tag}{account_tag}_{created_at}.json"
+        channel_tag = f"_{channel_id}" if channel_id else ""
+        filename = f"backup_{version_tag}{account_tag}{channel_tag}_{created_at}.json"
         payload = {
             "type": BACKUP_TYPE,
             "schema_version": BACKUP_SCHEMA_VERSION,
@@ -524,6 +552,7 @@ class CompanyService:
             "app_version": app_version or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "company_count": len(companies),
+            "channel": channel_id or "",
             "account": account_info,
             "companies": companies,
             "settings": settings,
@@ -549,12 +578,14 @@ class CompanyService:
             except OSError:
                 pass
 
+        scope = f"渠道 {channel_id}" if channel_id else "全部渠道"
         return {
-            "message": f"备份完成，共 {len(companies)} 条公司记录"
+            "message": f"备份完成（{scope}），共 {len(companies)} 条公司记录"
             + (f"（账号 {account_info['username']}）" if account_info and account_info.get("username") else ""),
             "filename": filename,
             "path": str(file_path),
             "company_count": len(companies),
+            "channel": channel_id or "",
             "created_at": payload["created_at"],
             "payload": payload,
         }
@@ -576,12 +607,13 @@ class CompanyService:
             )
         return items
 
-    def restore_backup(self, payload: Any) -> dict[str, Any]:
-        """Replace companies and settings from a portable backup.
+    def restore_backup(self, payload: Any, channel: str | None = None) -> dict[str, Any]:
+        """Replace companies from a portable backup.
 
-        Accepts the current backup file, older backups, and the previous
-        JSON export shape so a file can move between release versions.
+        Without channel: full account restore (also replaces settings when present).
+        With channel: only replace that channel's companies; other channels kept; tags merged.
         """
+        channel_id = self._normalize_channel(channel) if channel else None
         companies_raw, settings_raw, source_schema = self._extract_backup_parts(payload)
         records: list[dict[str, Any]] = []
         seen_names: set[str] = set()
@@ -593,7 +625,9 @@ class CompanyService:
             if not record:
                 skipped += 1
                 continue
-            name_key = record["company_name"].casefold()
+            if channel_id:
+                record["channel"] = channel_id
+            name_key = f"{self._item_channel(record)}::{record['company_name'].casefold()}"
             if name_key in seen_names:
                 skipped += 1
                 continue
@@ -606,7 +640,11 @@ class CompanyService:
         data = self._read_state()
         base_ids = [str(item.get("id")) for item in data.get("companies") or [] if item.get("id")]
         now = self._now()
-        data["companies"] = records
+        if channel_id:
+            kept = [item for item in (data.get("companies") or []) if self._item_channel(item) != channel_id]
+            data["companies"] = kept + records
+        else:
+            data["companies"] = records
         meta = data.setdefault("meta", {})
         if not isinstance(meta, dict):
             meta = {}
@@ -614,9 +652,14 @@ class CompanyService:
         meta["last_changed_at"] = now
         meta["restored_at"] = now
         meta["restored_from_schema"] = source_schema
+        if channel_id:
+            meta["restored_channel"] = channel_id
         self.storage.write(data, replace=True, base_ids=base_ids)
 
-        if settings_raw is not None:
+        if channel_id:
+            # 单渠道还原：只合并标签，不覆盖账号级设置
+            self._ensure_imported_option_tags(settings_raw, records)
+        elif settings_raw is not None:
             # 覆盖时以备份标签为主，并补上公司记录里出现过的自定义值
             self._apply_imported_option_tags(settings_raw, records, replace=True)
         else:
@@ -628,7 +671,8 @@ class CompanyService:
             self.storage.rebuild_timestamps_index()
 
         compatible = source_schema <= BACKUP_SCHEMA_VERSION
-        message = f"已还原 {len(records)} 条公司记录"
+        scope = f"渠道 {channel_id}" if channel_id else "全部渠道"
+        message = f"已还原 {len(records)} 条公司记录（{scope}）"
         if not compatible:
             message += "（来自更高版本备份，已按当前版本兼容字段写入）"
         return {
@@ -636,8 +680,9 @@ class CompanyService:
             "restored_count": len(records),
             "skipped_count": skipped,
             "schema_version": source_schema,
-            "items": self.list_companies(),
-            "summary": self.get_summary(),
+            "channel": channel_id or "",
+            "items": self.list_companies(channel=channel_id),
+            "summary": self.get_summary(channel=channel_id),
         }
 
     def _extract_backup_parts(self, payload: Any) -> tuple[list[Any], dict[str, Any] | None, int]:

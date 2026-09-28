@@ -102,7 +102,7 @@ def main() -> None:
     users = 0
     for item in dumped:
         if item["key"].endswith(":companies") and item["type"] == "hash" and isinstance(item.get("value"), dict):
-            if ":blacklist:" in item["key"]:
+            if ":ignored:" in item["key"] or ":blacklist:" in item["key"]:
                 continue
             hire_companies += len(item["value"])
         if item["key"].endswith(":users") and item["type"] == "hash" and isinstance(item.get("value"), dict):
