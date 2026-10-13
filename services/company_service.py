@@ -11,6 +11,7 @@ from services.storage import JsonStorage, RedisStorage, create_storage
 
 FIELD_LIMITS = {
     "company_name": 120,
+    "company_full_name": 200,
     "effect_status": 160,
     "industry": 80,
     "note": 500,
@@ -29,6 +30,9 @@ BACKUP_SCHEMA_VERSION = 1
 HEADER_ALIASES = {
     "企业名称": "company_name",
     "公司名称": "company_name",
+    "企业简称": "company_name",
+    "企业全称": "company_full_name",
+    "公司全称": "company_full_name",
     "交流状态": "effect_status",
     "效果状态": "effect_status",
     "行业": "industry",
@@ -39,6 +43,7 @@ HEADER_ALIASES = {
     "渠道": "channel",
     "招聘渠道": "channel",
     "company_name": "company_name",
+    "company_full_name": "company_full_name",
     "effect_status": "effect_status",
     "industry": "industry",
     "is_hunter": "is_hunter",
@@ -218,6 +223,11 @@ class CompanyService:
                 raise ValueError("当前渠道下企业名称已存在，请编辑原记录")
             record["company_name"] = company_name
 
+        if "company_full_name" in payload:
+            record["company_full_name"] = self._clean_text(
+                payload.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+            )
+
         for field in ("effect_status", "industry", "note"):
             if field in payload:
                 record[field] = self._clean_text(payload.get(field), FIELD_LIMITS[field])
@@ -234,6 +244,32 @@ class CompanyService:
         data["meta"]["last_changed_at"] = now
         self._save_record(data, record)
         return record
+
+    def patch_company_full_names(self, patches: dict[str, str]) -> int:
+        """按 id 批量写入企业全称；仅处理传入的补丁。"""
+        if not patches:
+            return 0
+        data = self._read_state()
+        now = self._now()
+        updated = 0
+        use_upsert = hasattr(self.storage, "upsert_company")
+        for record in data["companies"]:
+            item_id = str(record.get("id") or "")
+            if item_id not in patches:
+                continue
+            full = self._clean_text(patches[item_id], FIELD_LIMITS["company_full_name"])
+            if not full:
+                continue
+            record["company_full_name"] = full
+            record["updated_at"] = now
+            updated += 1
+            if use_upsert:
+                self.storage.upsert_company(record, {"last_changed_at": now})
+        if updated:
+            data["meta"]["last_changed_at"] = now
+            if not use_upsert:
+                self.storage.write(data)
+        return updated
 
     def delete_company(self, company_id: str) -> dict[str, Any]:
         data = self._read_state()
@@ -491,12 +527,25 @@ class CompanyService:
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(
-            ["企业名称", "交流状态", "行业", "是否是猎头", "是否是外包", "是否已面试", "备注", "渠道", "创建时间", "更新时间"]
+            [
+                "企业简称",
+                "企业全称",
+                "交流状态",
+                "行业",
+                "是否是猎头",
+                "是否是外包",
+                "是否已面试",
+                "备注",
+                "渠道",
+                "创建时间",
+                "更新时间",
+            ]
         )
         for item in self.list_companies(channel=channel_id):
             writer.writerow(
                 [
                     item.get("company_name", ""),
+                    item.get("company_full_name", ""),
                     item.get("effect_status", ""),
                     item.get("industry", ""),
                     self._display_flag(item.get("is_hunter")),
@@ -834,6 +883,7 @@ class CompanyService:
             if key in {
                 "id",
                 "company_name",
+                "company_full_name",
                 "effect_status",
                 "industry",
                 "is_hunter",
@@ -851,6 +901,9 @@ class CompanyService:
             {
                 "id": record_id,
                 "company_name": company_name,
+                "company_full_name": self._clean_text(
+                    item.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+                ),
                 "effect_status": self._clean_text(item.get("effect_status"), FIELD_LIMITS["effect_status"]),
                 "industry": self._clean_text(item.get("industry"), FIELD_LIMITS["industry"]),
                 "is_hunter": self._normalize_flag(item.get("is_hunter")),
@@ -875,6 +928,9 @@ class CompanyService:
         return {
             "id": str(uuid.uuid4()),
             "company_name": company_name,
+            "company_full_name": self._clean_text(
+                payload.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+            ),
             "channel": self._normalize_channel(payload.get("channel")),
             "effect_status": self._clean_text(payload.get("effect_status"), FIELD_LIMITS["effect_status"]),
             "industry": self._clean_text(payload.get("industry"), FIELD_LIMITS["industry"]),
@@ -885,7 +941,6 @@ class CompanyService:
             "created_at": now,
             "updated_at": now,
         }
-
     def _coerce_import_text(self, text: str) -> str:
         """把本账号导出的 JSON 转成表格文本。写入目标始终是当前账号，不看文件里的账号字段。"""
         stripped = text.strip()

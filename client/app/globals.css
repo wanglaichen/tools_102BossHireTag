@@ -110,6 +110,50 @@ textarea {
   font-size: 12px;
 }
 
+.sync-progress-bar {
+  flex-shrink: 0;
+  padding: 6px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(247, 250, 248, 0.92);
+}
+
+.sync-progress-bar.is-active {
+  background: rgba(232, 244, 240, 0.95);
+}
+
+.sync-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sync-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(15, 159, 138, 0.12);
+  overflow: hidden;
+}
+
+.sync-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--teal, #0f9f8a);
+  transition: width 0.15s ease-out;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
 .app-body {
   display: flex;
   flex: 1;
@@ -646,6 +690,48 @@ textarea {
 
 .company-name {
   font-weight: 600;
+}
+
+.company-name-cell {
+  display: grid;
+  gap: 5px;
+}
+
+.company-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.company-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.45;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.company-mark-ignored {
+  color: #8a5a12;
+  background: rgba(184, 121, 45, 0.12);
+  border-color: rgba(184, 121, 45, 0.28);
+}
+
+.company-mark-block {
+  color: #8a2f28;
+  background: rgba(196, 92, 74, 0.12);
+  border-color: rgba(196, 92, 74, 0.3);
+}
+
+.company-mark-watch {
+  color: var(--teal-deep);
+  background: rgba(15, 159, 138, 0.12);
+  border-color: rgba(15, 159, 138, 0.3);
 }
 
 .company-full {

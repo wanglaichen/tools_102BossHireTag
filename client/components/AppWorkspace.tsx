@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LogOut, Settings, Shield } from "lucide-react";
+import { LogOut, RefreshCw, Settings, Shield } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/components/AuthProvider";
 import { AccountSettingsModal } from "@/components/AccountSettingsModal";
@@ -9,9 +9,19 @@ import { AdminModal } from "@/components/AdminModal";
 import { HirePanel } from "@/components/panels/HirePanel";
 import { NamedListPanel } from "@/components/panels/NamedListPanel";
 import { JobUpdatesPanel } from "@/components/panels/JobUpdatesPanel";
-import { getChannels, getProxy, getVersion } from "@/lib/api";
+import { getChannels, getProxy, getVersion, syncCompanyFullNames } from "@/lib/api";
 import { authJson } from "@/lib/auth";
 import type { Channel, FeatureId } from "@/lib/types";
+
+type SyncProgress = {
+  active: boolean;
+  label: string;
+  total: number;
+  done: number;
+  updated: number;
+  step: number;
+  steps: number;
+};
 
 const FEATURES: {
   id: FeatureId;
@@ -37,6 +47,16 @@ export function AppWorkspace() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [channelTick, setChannelTick] = useState(0);
+  const [listTick, setListTick] = useState(0);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress>({
+    active: false,
+    label: "",
+    total: 0,
+    done: 0,
+    updated: 0,
+    step: 0,
+    steps: 6,
+  });
 
   const loadChannels = useCallback(async () => {
     const items = await getChannels();
@@ -78,6 +98,48 @@ export function AppWorkspace() {
     }
   }
 
+  async function runFullNameSync() {
+    if (syncProgress.active) return;
+    if (
+      !confirm(
+        "将按顺序同步企业全称：\n忽略→投递 → 投递→忽略 → 忽略→黑名单 → 黑名单→忽略 → 忽略→关注 → 关注→忽略\n\n仅写入目标侧为空的全称；源侧为空不同步。确定开始？",
+      )
+    ) {
+      return;
+    }
+    setSyncProgress({
+      active: true,
+      label: "准备同步…",
+      total: 0,
+      done: 0,
+      updated: 0,
+      step: 0,
+      steps: 6,
+    });
+    try {
+      const last = await syncCompanyFullNames((event) => {
+        setSyncProgress((prev) => ({
+          active: true,
+          label: event.message || event.label || prev.label,
+          total: event.total ?? prev.total,
+          done: event.totalDone ?? prev.done,
+          updated: event.updated ?? prev.updated,
+          step: event.step ?? prev.step,
+          steps: typeof event.steps === "number" ? event.steps : prev.steps,
+        }));
+      });
+      toast.success(last.message || `企业全称同步完成：写入 ${last.updated || 0} 条`);
+      setListTick((n) => n + 1);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "企业全称同步失败");
+    } finally {
+      setSyncProgress((prev) => ({ ...prev, active: false }));
+    }
+  }
+
+  const syncPercent =
+    syncProgress.total > 0 ? Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100)) : 0;
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -114,6 +176,16 @@ export function AppWorkspace() {
           </>
         ) : null}
         <div style={{ flex: 1 }} />
+        <button
+          className="btn btn-sm"
+          type="button"
+          disabled={syncProgress.active}
+          onClick={() => void runFullNameSync()}
+          title="跨名单补全企业全称（空值不同步）"
+        >
+          <RefreshCw size={14} className={syncProgress.active ? "spin" : undefined} />
+          企业全称同步
+        </button>
         <span className="muted">
           {user?.displayName || user?.username}
           （{user?.role === "admin" ? "管理员" : "账号"}）
@@ -133,6 +205,23 @@ export function AppWorkspace() {
           退出
         </button>
       </header>
+      {syncProgress.active ? (
+        <div className="sync-progress-bar is-active" role="status" aria-live="polite">
+          <div className="sync-progress-meta">
+            <span>
+              {syncProgress.step > 0 ? `步骤 ${syncProgress.step}/${syncProgress.steps}` : "同步"}
+              {syncProgress.label ? ` · ${syncProgress.label}` : ""}
+            </span>
+            <span>
+              {syncProgress.done}/{syncProgress.total || "—"}（已写入 {syncProgress.updated}）
+              {syncProgress.total > 0 ? ` · ${syncPercent}%` : ""}
+            </span>
+          </div>
+          <div className="sync-progress-track">
+            <div className="sync-progress-fill" style={{ width: `${syncPercent}%` }} />
+          </div>
+        </div>
+      ) : null}
 
       <div className="app-body">
         <nav className="feature-rail" aria-label="功能页签">
@@ -169,7 +258,11 @@ export function AppWorkspace() {
 
         <div className="feature-stage">
           {feature === "hire" ? (
-            <HirePanel channel={channel} channelLabel={channelLabel(channels, channel)} reloadKey={channelTick} />
+            <HirePanel
+              channel={channel}
+              channelLabel={channelLabel(channels, channel)}
+              reloadKey={channelTick + listTick}
+            />
           ) : null}
           {feature === "ignored" ? (
             <NamedListPanel
@@ -179,7 +272,7 @@ export function AppWorkspace() {
               channelLabel={channelLabel(channels, channel)}
               channelRequired
               fullNameField
-              reloadKey={channelTick}
+              reloadKey={channelTick + listTick}
             />
           ) : null}
           {feature === "blocklist" ? (
@@ -189,8 +282,8 @@ export function AppWorkspace() {
               channel=""
               channelLabel="黑名单企业"
               channelRequired={false}
-              fullNameField={false}
-              reloadKey={channelTick}
+              fullNameField
+              reloadKey={channelTick + listTick}
             />
           ) : null}
           {feature === "watchlist" ? (
@@ -200,8 +293,8 @@ export function AppWorkspace() {
               channel=""
               channelLabel="持续关注"
               channelRequired={false}
-              fullNameField={false}
-              reloadKey={channelTick}
+              fullNameField
+              reloadKey={channelTick + listTick}
             />
           ) : null}
           {feature === "jobUpdates" ? (

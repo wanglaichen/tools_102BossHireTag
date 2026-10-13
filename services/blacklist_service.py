@@ -93,6 +93,32 @@ class BlacklistService:
         self._save_item(data, record)
         return record
 
+    def patch_company_full_names(self, patches: dict[str, str]) -> int:
+        """按 id 批量写入企业全称。"""
+        if not patches:
+            return 0
+        data = self._read_state()
+        now = self._now()
+        updated = 0
+        use_upsert = hasattr(self.storage, "upsert_company")
+        for record in data["items"]:
+            item_id = str(record.get("id") or "")
+            if item_id not in patches:
+                continue
+            full = self._clean_text(patches[item_id], FIELD_LIMITS["company_full_name"])
+            if not full:
+                continue
+            record["company_full_name"] = full
+            record["updated_at"] = now
+            updated += 1
+            if use_upsert:
+                self.storage.upsert_company(record, {"last_changed_at": now})
+        if updated:
+            data["meta"]["last_changed_at"] = now
+            if not use_upsert:
+                self.storage.write(self._to_storage_shape(data))
+        return updated
+
     def delete_item(self, item_id: str) -> dict[str, Any]:
         data = self._read_state()
         before = len(data["items"])

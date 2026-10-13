@@ -30,6 +30,7 @@ export type Channel = {
 export type Company = {
   id: string;
   company_name: string;
+  company_full_name?: string;
   effect_status?: string;
   industry?: string;
   is_hunter?: string;

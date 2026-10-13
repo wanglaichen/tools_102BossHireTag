@@ -11,6 +11,7 @@ def register_blueprints(app: Flask) -> None:
     from routes.blocklist import bp as blocklist_bp
     from routes.channels import bp as channels_bp
     from routes.companies import bp as companies_bp
+    from routes.full_name_sync import bp as full_name_sync_bp
     from routes.job_updates import bp as job_updates_bp
     from routes.proxy import bp as proxy_bp
     from routes.settings import bp as settings_bp
@@ -25,4 +26,5 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(blocklist_bp)
     app.register_blueprint(watchlist_bp)
     app.register_blueprint(job_updates_bp)
+    app.register_blueprint(full_name_sync_bp)
     app.register_blueprint(proxy_bp)

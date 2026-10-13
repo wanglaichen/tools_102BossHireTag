@@ -43,14 +43,14 @@ const labels: Record<
     reason: "拉黑原因",
     empty: "暂无黑名单记录",
     countKey: "blacklist_count",
-    searchPh: "搜索企业名称或原因",
+    searchPh: "搜索简称、全称或拉黑原因",
   },
   watchlist: {
     add: "加入持续关注",
     reason: "关注备注",
     empty: "暂无持续关注记录",
     countKey: "watchlist_count",
-    searchPh: "搜索企业名称或备注",
+    searchPh: "搜索简称、全称或关注备注",
   },
 };
 

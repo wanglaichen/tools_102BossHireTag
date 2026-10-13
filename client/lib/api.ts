@@ -294,4 +294,79 @@ export async function exportCompaniesCsv(channel: string, username: string) {
   );
 }
 
+export type FullNameSyncEvent = {
+  type: "start" | "step_start" | "progress" | "step_done" | "done" | "error";
+  message?: string;
+  total?: number;
+  totalDone?: number;
+  updated?: number;
+  steps?: number | Array<{ stepId?: string; label?: string; scanned?: number; updated?: number }>;
+  step?: number;
+  stepId?: string;
+  label?: string;
+  stepDone?: number;
+  stepTotal?: number;
+  stepUpdated?: number;
+};
+
+/** 企业全称跨名单同步（NDJSON 流式进度） */
+export async function syncCompanyFullNames(
+  onEvent: (event: FullNameSyncEvent) => void,
+): Promise<FullNameSyncEvent> {
+  const res = await authFetch("/api/company-full-name-sync", { method: "POST", body: "{}" });
+  if (!res.ok) {
+    const raw = await res.text();
+    let message = `HTTP ${res.status}`;
+    try {
+      const data = JSON.parse(raw) as { message?: string };
+      if (data.message) message = data.message;
+    } catch {
+      if (/not found on the server/i.test(raw) || res.status === 404) {
+        message = "同步接口不存在，请重启 API 后再试";
+      } else if (raw.trim()) {
+        message = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+      }
+    }
+    throw new Error(message);
+  }
+  if (!res.body) {
+    throw new Error("浏览器不支持流式响应");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let last: FullNameSyncEvent = { type: "start" };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const text = line.trim();
+      if (!text) continue;
+      const event = JSON.parse(text) as FullNameSyncEvent;
+      last = event;
+      onEvent(event);
+      if (event.type === "error") {
+        throw new Error(event.message || "企业全称同步失败");
+      }
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail) {
+    const event = JSON.parse(tail) as FullNameSyncEvent;
+    last = event;
+    onEvent(event);
+    if (event.type === "error") {
+      throw new Error(event.message || "企业全称同步失败");
+    }
+  }
+
+  return last;
+}
+
 export { getAuthHeaders, getStoredToken };

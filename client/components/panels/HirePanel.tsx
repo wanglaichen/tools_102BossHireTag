@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Ban, EyeOff, Star } from "lucide-react";
 import { toast } from "sonner";
 import {
   backupCompanies,
@@ -19,6 +20,19 @@ import { useAuth } from "@/components/AuthProvider";
 import { flagLabel, formatTime } from "@/lib/format";
 import type { Company, Summary } from "@/lib/types";
 
+function nameKey(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function toNameSet(items: { company_name?: string }[]) {
+  const set = new Set<string>();
+  items.forEach((row) => {
+    const name = nameKey(row.company_name);
+    if (name) set.add(name);
+  });
+  return set;
+}
+
 const TIME_FILTERS = [
   { id: "all", label: "所有" },
   { id: "today", label: "今天" },
@@ -32,8 +46,28 @@ type Props = {
   reloadKey?: number;
 };
 
+const HIDE_IGNORED_KEY = "boss_hire_hide_ignored";
+
+function readHideIgnoredPref() {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(HIDE_IGNORED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeHideIgnoredPref(value: boolean) {
+  try {
+    localStorage.setItem(HIDE_IGNORED_KEY, value ? "1" : "0");
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 const emptyForm = {
   company_name: "",
+  company_full_name: "",
   effect_status: "",
   industry: "",
   is_hunter: "unknown",
@@ -51,8 +85,10 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
   const [q, setQ] = useState("");
   const [hunter, setHunter] = useState("");
   const [outsourced, setOutsourced] = useState("");
-  const [hideIgnored, setHideIgnored] = useState(false);
+  const [hideIgnored, setHideIgnored] = useState(readHideIgnoredPref);
   const [ignoredNames, setIgnoredNames] = useState<Set<string>>(new Set());
+  const [blocklistNames, setBlocklistNames] = useState<Set<string>>(new Set());
+  const [watchlistNames, setWatchlistNames] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -76,17 +112,18 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
     }
   }, [channel, timeFilter]);
 
-  const loadIgnored = useCallback(async () => {
+  const loadMarkers = useCallback(async () => {
     try {
-      const data = await listNamed("ignored", channel, "");
-      const set = new Set<string>();
-      data.items.forEach((row) => {
-        const name = String(row.company_name || "").trim().toLowerCase();
-        if (name) set.add(name);
-      });
-      setIgnoredNames(set);
+      const [ignored, blocklist, watchlist] = await Promise.all([
+        listNamed("ignored", channel, ""),
+        listNamed("blocklist", "", ""),
+        listNamed("watchlist", "", ""),
+      ]);
+      setIgnoredNames(toNameSet(ignored.items));
+      setBlocklistNames(toNameSet(blocklist.items));
+      setWatchlistNames(toNameSet(watchlist.items));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "加载忽略企业失败");
+      toast.error(err instanceof Error ? err.message : "加载名单标记失败");
     }
   }, [channel]);
 
@@ -95,14 +132,14 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
   }, [load, reloadKey]);
 
   useEffect(() => {
-    if (hideIgnored) loadIgnored().catch(() => undefined);
-  }, [hideIgnored, loadIgnored]);
+    loadMarkers().catch(() => undefined);
+  }, [loadMarkers, reloadKey]);
 
   const filtered = useMemo(() => {
     const keyword = q.trim().toLowerCase();
     return items.filter((item) => {
       if (hideIgnored && ignoredNames.size) {
-        const name = String(item.company_name || "").trim().toLowerCase();
+        const name = nameKey(item.company_name);
         if (name && ignoredNames.has(name)) return false;
       }
       if (hunter && item.is_hunter !== hunter) return false;
@@ -110,6 +147,7 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
       if (!keyword) return true;
       const searchable = [
         item.company_name,
+        item.company_full_name,
         item.effect_status,
         item.industry,
         flagLabel(item.is_hunter),
@@ -136,6 +174,7 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
     setEditingId(item.id);
     setForm({
       company_name: item.company_name || "",
+      company_full_name: item.company_full_name || "",
       effect_status: item.effect_status || "",
       industry: item.industry || "",
       is_hunter: item.is_hunter || "unknown",
@@ -193,7 +232,7 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
         channel,
       })) as { message?: string };
       toast.success(result.message || `已将「${name}」加入忽略企业`);
-      if (hideIgnored) await loadIgnored();
+      await loadMarkers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "加入忽略失败");
     }
@@ -298,12 +337,22 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
           </div>
           <div className="form-grid">
             <label className="field">
-              <span>企业名称</span>
+              <span>企业简称</span>
               <input
                 className="input"
                 required
                 value={form.company_name}
                 onChange={(e) => setForm((s) => ({ ...s, company_name: e.target.value }))}
+                placeholder="列表上方显示的简称"
+              />
+            </label>
+            <label className="field">
+              <span>企业全称</span>
+              <input
+                className="input"
+                value={form.company_full_name}
+                onChange={(e) => setForm((s) => ({ ...s, company_full_name: e.target.value }))}
+                placeholder="可选，列表下方显示的全称"
               />
             </label>
             <label className="field">
@@ -417,12 +466,14 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
                 <option value="no">非外包</option>
                 <option value="unknown">未标记</option>
               </select>
-              <label className="check-inline" title="与左侧「忽略企业」同渠道名单精确匹配">
+              <label className="check-inline" title="与左侧「忽略企业」同渠道名单精确匹配；选择会记住，刷新后仍生效">
                 <input
                   type="checkbox"
                   checked={hideIgnored}
                   onChange={(e) => {
-                    setHideIgnored(e.target.checked);
+                    const on = e.target.checked;
+                    setHideIgnored(on);
+                    writeHideIgnoredPref(on);
                     setPage(1);
                   }}
                 />
@@ -489,10 +540,42 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
                     </td>
                   </tr>
                 ) : (
-                  pageItems.map((item) => (
+                  pageItems.map((item) => {
+                    const key = nameKey(item.company_name);
+                    const isIgnored = key ? ignoredNames.has(key) : false;
+                    const isBlocked = key ? blocklistNames.has(key) : false;
+                    const isWatched = key ? watchlistNames.has(key) : false;
+                    return (
                     <tr key={item.id}>
                       <td>
-                        <div className="company-name">{item.company_name}</div>
+                        <div className="company-name-cell">
+                          <div className="company-name">{item.company_name}</div>
+                          {item.company_full_name ? (
+                            <div className="company-full">{item.company_full_name}</div>
+                          ) : null}
+                          {isIgnored || isBlocked || isWatched ? (
+                            <div className="company-marks" aria-label="名单标记">
+                              {isIgnored ? (
+                                <span className="company-mark company-mark-ignored" title="已在忽略企业">
+                                  <EyeOff size={11} strokeWidth={2.4} />
+                                  忽略
+                                </span>
+                              ) : null}
+                              {isBlocked ? (
+                                <span className="company-mark company-mark-block" title="已在黑名单">
+                                  <Ban size={11} strokeWidth={2.4} />
+                                  黑名单
+                                </span>
+                              ) : null}
+                              {isWatched ? (
+                                <span className="company-mark company-mark-watch" title="持续关注中">
+                                  <Star size={11} strokeWidth={2.4} />
+                                  关注
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
                       </td>
                       <td>
                         <div className="row-actions">
@@ -502,14 +585,16 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
                           <button className="btn btn-sm btn-danger" type="button" onClick={() => onDelete(item)}>
                             删除
                           </button>
-                          <button
-                            className="btn btn-sm"
-                            type="button"
-                            title="加入当前渠道的忽略企业名单"
-                            onClick={() => onAddToIgnored(item)}
-                          >
-                            添加到忽略企业
-                          </button>
+                          {!isIgnored ? (
+                            <button
+                              className="btn btn-sm"
+                              type="button"
+                              title="加入当前渠道的忽略企业名单"
+                              onClick={() => onAddToIgnored(item)}
+                            >
+                              添加到忽略企业
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                       <td>
@@ -523,7 +608,8 @@ export function HirePanel({ channel, channelLabel, reloadKey = 0 }: Props) {
                       <td>{item.note || ""}</td>
                       <td>{formatTime(item.updated_at)}</td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>

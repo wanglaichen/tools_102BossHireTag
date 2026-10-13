@@ -10,6 +10,7 @@ from services.storage import JsonStorage, RedisStorage
 
 FIELD_LIMITS = {
     "company_name": 120,
+    "company_full_name": 200,
     "reason": 500,
 }
 
@@ -31,6 +32,7 @@ class BlocklistService:
                 item
                 for item in items
                 if text in str(item.get("company_name") or "").casefold()
+                or text in str(item.get("company_full_name") or "").casefold()
                 or text in str(item.get("reason") or "").casefold()
             ]
         return sorted(items, key=lambda x: str(x.get("updated_at") or ""), reverse=True)
@@ -46,6 +48,9 @@ class BlocklistService:
         record = {
             "id": str(uuid.uuid4()),
             "company_name": company_name,
+            "company_full_name": self._clean_text(
+                payload.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+            ),
             "reason": self._clean_text(payload.get("reason"), FIELD_LIMITS["reason"]),
             "created_at": now,
             "updated_at": now,
@@ -68,12 +73,42 @@ class BlocklistService:
             if existing and existing.get("id") != item_id:
                 raise ValueError("该企业已在黑名单中")
             record["company_name"] = company_name
+        if "company_full_name" in payload:
+            record["company_full_name"] = self._clean_text(
+                payload.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+            )
         if "reason" in payload:
             record["reason"] = self._clean_text(payload.get("reason"), FIELD_LIMITS["reason"])
         record["updated_at"] = self._now()
         data["meta"]["last_changed_at"] = record["updated_at"]
         self._save_item(data, record)
         return record
+
+    def patch_company_full_names(self, patches: dict[str, str]) -> int:
+        """按 id 批量写入企业全称。"""
+        if not patches:
+            return 0
+        data = self._read_state()
+        now = self._now()
+        updated = 0
+        use_upsert = hasattr(self.storage, "upsert_company")
+        for record in data["items"]:
+            item_id = str(record.get("id") or "")
+            if item_id not in patches:
+                continue
+            full = self._clean_text(patches[item_id], FIELD_LIMITS["company_full_name"])
+            if not full:
+                continue
+            record["company_full_name"] = full
+            record["updated_at"] = now
+            updated += 1
+            if use_upsert:
+                self.storage.upsert_company(record, {"last_changed_at": now})
+        if updated:
+            data["meta"]["last_changed_at"] = now
+            if not use_upsert:
+                self.storage.write(self._to_storage_shape(data))
+        return updated
 
     def delete_item(self, item_id: str) -> dict[str, Any]:
         data = self._read_state()
@@ -135,11 +170,12 @@ class BlocklistService:
 
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["企业名称", "拉黑原因", "创建时间", "更新时间"])
+        writer.writerow(["企业简称", "企业全称", "拉黑原因", "创建时间", "更新时间"])
         for item in self.list_items():
             writer.writerow(
                 [
                     item.get("company_name") or "",
+                    item.get("company_full_name") or "",
                     item.get("reason") or "",
                     item.get("created_at") or "",
                     item.get("updated_at") or "",
@@ -180,6 +216,9 @@ class BlocklistService:
                 {
                     "id": str(item.get("id") or uuid.uuid4()),
                     "company_name": name,
+                    "company_full_name": self._clean_text(
+                        item.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+                    ),
                     "reason": self._clean_text(item.get("reason"), FIELD_LIMITS["reason"]),
                     "created_at": str(item.get("created_at") or now),
                     "updated_at": str(item.get("updated_at") or now),
@@ -208,6 +247,7 @@ class BlocklistService:
             existing = self._find_by_name(data["items"], item["company_name"])
             if existing:
                 existing["reason"] = item["reason"]
+                existing["company_full_name"] = item.get("company_full_name") or ""
                 existing["updated_at"] = now
                 updated_count += 1
                 self._save_item(data, existing)

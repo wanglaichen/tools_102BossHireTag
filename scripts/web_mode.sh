@@ -59,6 +59,7 @@ Get-CimInstance Win32_Process | Where-Object {
 
 stop_flask_api() {
   local root="${ROOT_DIR:-.}"
+  local port="${APP_PORT:-9212}"
   local win_root
   win_root="$(_win_path "$root")"
   local ps=""
@@ -71,8 +72,13 @@ stop_flask_api() {
   fi
   "$ps" -NoProfile -Command "
 \$root = '$win_root'
+\$port = $port
 Get-CimInstance Win32_Process | Where-Object {
   \$_.CommandLine -and \$_.CommandLine -match 'app\.py' -and \$_.CommandLine -match [regex]::Escape(\$root)
 } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }
+# 清掉仍占用 API 端口的残留监听（避免新旧实例并存导致偶发 404）
+Get-NetTCPConnection -LocalPort \$port -State Listen -ErrorAction SilentlyContinue |
+  Select-Object -ExpandProperty OwningProcess -Unique |
+  ForEach-Object { Stop-Process -Id \$_ -Force -ErrorAction SilentlyContinue }
 " >/dev/null 2>&1 || true
 }
