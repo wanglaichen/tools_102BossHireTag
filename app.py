@@ -11,7 +11,8 @@ from services.channel_service import ChannelService
 from services.storage import StorageUnavailable
 
 
-app = Flask(__name__)
+# 仅提供 API；Web 由 client/（Next.js）承载，不再使用 templates/static
+app = Flask(__name__, static_folder=None, template_folder=None)
 app.config.from_object(AppConfig)
 
 auth_service = AuthService(
