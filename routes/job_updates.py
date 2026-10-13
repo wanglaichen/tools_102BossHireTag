@@ -82,7 +82,12 @@ def upsert_job_updates_batch():
     if not isinstance(items, list):
         return jsonify({"message": "请提供 items 数组"}), 400
     channel = _channel_from_request(payload)
-    result = job_updates_svc().upsert_batch(items, channel=channel)
+    preserve = bool(payload.get("preserve_updated_at") or payload.get("keep_updated_at"))
+    result = job_updates_svc().upsert_batch(
+        items,
+        channel=channel,
+        preserve_updated_at=preserve,
+    )
     return jsonify({
         "message": (
             f"批量完成：新增 {result['created_count']}，更新 {result['updated_count']}，"

@@ -169,7 +169,10 @@ class JobUpdateService:
             return None
 
     def upsert_item(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """单条 upsert：同渠道同企业同岗位则更新，否则新增。返回 {item, created}。"""
+        """单条 upsert：同渠道同企业同岗位则更新，否则新增。返回 {item, created}。
+
+        payload.preserve_updated_at / keep_updated_at 为真时：重复采集可覆盖字段，但不刷新 updated_at。
+        """
         company_name = self._clean_text(payload.get("company_name"), FIELD_LIMITS["company_name"])
         job_title = self._clean_text(payload.get("job_title"), FIELD_LIMITS["job_title"])
         if not company_name:
@@ -182,13 +185,17 @@ class JobUpdateService:
         existing = self._find_by_id(data["items"], item_id)
         now = self._now()
         fields = self._extract_optional_fields(payload)
+        preserve_updated_at = self._truthy(payload.get("preserve_updated_at")) or self._truthy(
+            payload.get("keep_updated_at")
+        )
         if existing:
             existing["company_name"] = company_name
             existing["job_title"] = job_title
             existing["channel"] = channel
             self._merge_optional_fields(existing, payload, fields)
-            existing["updated_at"] = now
-            data["meta"]["last_changed_at"] = now
+            if not preserve_updated_at:
+                existing["updated_at"] = now
+                data["meta"]["last_changed_at"] = now
             self._save_item(data, existing)
             return {"item": existing, "created": False}
         record = {
@@ -205,7 +212,13 @@ class JobUpdateService:
         self._save_item(data, record)
         return {"item": record, "created": True}
 
-    def upsert_batch(self, items: list[Any], *, channel: str | None = None) -> dict[str, Any]:
+    def upsert_batch(
+        self,
+        items: list[Any],
+        *,
+        channel: str | None = None,
+        preserve_updated_at: bool = False,
+    ) -> dict[str, Any]:
         if not isinstance(items, list):
             raise ValueError("items 必须是数组")
         default_channel = self._normalize_channel(channel) if channel else None
@@ -220,6 +233,8 @@ class JobUpdateService:
             payload = dict(raw)
             if default_channel and not payload.get("channel"):
                 payload["channel"] = default_channel
+            if preserve_updated_at and "preserve_updated_at" not in payload and "keep_updated_at" not in payload:
+                payload["preserve_updated_at"] = True
             try:
                 result = self.upsert_item(payload)
             except ValueError:
@@ -325,10 +340,19 @@ class JobUpdateService:
             salary_min, salary_max = salary_max, salary_min
         return {
             "location": cls._clean_text(payload.get("location"), FIELD_LIMITS["location"]),
-            "job_summary": cls._clean_text(payload.get("job_summary"), FIELD_LIMITS["job_summary"]),
+            "job_summary": cls._normalize_job_summary(
+                cls._clean_text(payload.get("job_summary"), FIELD_LIMITS["job_summary"])
+            ),
             "salary_min": salary_min,
             "salary_max": salary_max,
         }
+
+    @staticmethod
+    def _normalize_job_summary(text: str) -> str:
+        """简介保持原始简洁；真实换行转为可见的 \\n 符号。"""
+        if not text:
+            return text
+        return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
 
     @staticmethod
     def _merge_optional_fields(record: dict[str, Any], payload: dict[str, Any], fields: dict[str, Any]) -> None:
@@ -364,6 +388,13 @@ class JobUpdateService:
         if num < 0:
             raise ValueError("薪资不能为负数")
         return int(num)
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().casefold()
+        return text in {"1", "true", "yes", "y", "on"}
 
     @staticmethod
     def _now() -> str:

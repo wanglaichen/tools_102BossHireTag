@@ -11,6 +11,7 @@ from services.account_factory import (
     blocklist_for_account,
     job_updates_for_account,
     service_for_account,
+    watchlist_for_account,
 )
 from services.auth_service import AuthError, AuthService
 from services.blacklist_service import BlacklistService
@@ -19,6 +20,7 @@ from services.channel_service import ChannelService
 from services.company_service import CompanyService
 from services.job_update_service import JobUpdateService
 from services.storage import RedisProxyStore
+from services.watchlist_service import WatchlistService
 
 auth_service: AuthService | None = None
 channel_service: ChannelService | None = None
@@ -59,6 +61,13 @@ def blocklist_svc() -> BlocklistService:
     if not user:
         raise AuthError("未登录")
     return blocklist_for_account(user)
+
+
+def watchlist_svc() -> WatchlistService:
+    user = getattr(g, "account", None)
+    if not user:
+        raise AuthError("未登录")
+    return watchlist_for_account(user)
 
 
 def job_updates_svc() -> JobUpdateService:

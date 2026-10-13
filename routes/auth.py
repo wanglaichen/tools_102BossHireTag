@@ -8,6 +8,7 @@ from flask import Blueprint, Response, g, jsonify, request
 
 from config import AppConfig
 from routes.deps import get_auth, require_admin
+from services.account_bundle import export_account_bundle, import_account_bundle
 from services.account_factory import blacklist_for_account, drop_account_caches, service_for_account
 from services.auth_service import AuthError
 
@@ -36,7 +37,39 @@ def auth_login():
         return jsonify({"message": "登录成功", **result})
     result = get_auth().login_with_code(payload.get("code", ""))
     account = get_auth().ensure_wechat_user(result["user"]["openid"])
+    get_auth().assert_user_accessible(account)
     return jsonify({"message": "登录成功", **result, "user": get_auth().public_user(account)})
+
+
+@bp.route("/api/auth/registration-policy/public", methods=["GET"])
+def auth_registration_policy_public():
+    return jsonify({"trialHours": get_auth().get_self_register_trial_hours()})
+
+
+@bp.route("/api/auth/registration-policy", methods=["GET"])
+def auth_registration_policy_get():
+    require_admin()
+    auth = get_auth()
+    return jsonify(
+        {
+            "trialHours": auth.get_self_register_trial_hours(),
+            "defaultTrialHours": auth.DEFAULT_SELF_REGISTER_TRIAL_HOURS,
+        }
+    )
+
+
+@bp.route("/api/auth/registration-policy", methods=["PUT"])
+def auth_registration_policy_put():
+    require_admin()
+    payload = request.get_json(silent=True) or {}
+    trial_hours = get_auth().set_self_register_trial_hours(payload.get("trialHours"))
+    return jsonify(
+        {
+            "trialHours": trial_hours,
+            "defaultTrialHours": get_auth().DEFAULT_SELF_REGISTER_TRIAL_HOURS,
+            "message": "试用策略已更新",
+        }
+    )
 
 
 @bp.route("/api/auth/logout", methods=["POST"])
@@ -67,7 +100,17 @@ def require_admin() -> dict:
 @bp.route("/api/auth/users", methods=["GET"])
 def auth_list_users():
     require_admin()
-    return jsonify({"users": get_auth().list_users()})
+    auth = get_auth()
+    trial_hours = auth.get_self_register_trial_hours()
+    return jsonify(
+        {
+            "users": auth.list_users(),
+            "registrationPolicy": {
+                "trialHours": trial_hours,
+                "defaultTrialHours": auth.DEFAULT_SELF_REGISTER_TRIAL_HOURS,
+            },
+        }
+    )
 
 
 @bp.route("/api/auth/users", methods=["POST"])
@@ -81,6 +124,7 @@ def auth_create_user():
             display_name=payload.get("displayName"),
             role=payload.get("role") or "user",
             source="admin",
+            apply_trial=False,
         )
     except ValueError as error:
         status = 409 if "已存在" in str(error) else 400
@@ -102,26 +146,48 @@ def auth_delete_user(user_id: str):
     return jsonify({"ok": True, "message": "账号已删除"})
 
 
-@bp.route("/api/auth/users/<user_id>/export", methods=["GET"])
-def auth_export_user_backup(user_id: str):
-    """管理员导出指定账号的完整备份（含公司记录与自定义标签）。"""
-    require_admin()
-    target = get_auth().read_user(user_id)
-    if not target:
-        raise AuthError("用户不存在", 404)
-    service = service_for_account(target)
-    backup_dir = str(Path(AppConfig.DATA_DIR) / "backups" / str(target["id"]))
-    result = service.create_backup(
-        backup_dir,
-        app_version=AppConfig.APP_VERSION,
-        account=get_auth().public_user(target),
-    )
+def _bundle_download(result: dict) -> Response:
     body = json.dumps(result["payload"], ensure_ascii=False, indent=2) + "\n"
     return Response(
         body,
         mimetype="application/json; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename={result['filename']}"},
     )
+
+
+@bp.route("/api/account/bundle", methods=["GET"])
+def account_export_bundle():
+    """当前登录账号导出全部业务数据（迁移用）。"""
+    result = export_account_bundle(g.account, public_account=get_auth().public_user(g.account))
+    return _bundle_download(result)
+
+
+@bp.route("/api/account/bundle/import", methods=["POST"])
+def account_import_bundle():
+    """当前账号增量导入全部数据包。"""
+    payload = request.get_json(silent=True) or {}
+    result = import_account_bundle(g.account, payload.get("text", ""), overwrite=False)
+    return jsonify(result)
+
+
+@bp.route("/api/account/bundle/import-overwrite", methods=["POST"])
+def account_import_bundle_overwrite():
+    """当前账号覆盖导入全部数据包。"""
+    payload = request.get_json(silent=True) or {}
+    result = import_account_bundle(g.account, payload.get("text", ""), overwrite=True)
+    return jsonify(result)
+
+
+@bp.route("/api/auth/users/<user_id>/export", methods=["GET"])
+@bp.route("/api/auth/users/<user_id>/bundle", methods=["GET"])
+def auth_export_user_backup(user_id: str):
+    """管理员导出指定账号的全部业务数据（登记/忽略/黑名单/关注/岗位更新）。"""
+    require_admin()
+    target = get_auth().read_user(user_id)
+    if not target:
+        raise AuthError("用户不存在", 404)
+    result = export_account_bundle(target, public_account=get_auth().public_user(target))
+    return _bundle_download(result)
 
 
 @bp.route("/api/auth/users/<user_id>/export.csv", methods=["GET"])
@@ -143,35 +209,39 @@ def auth_export_user_csv(user_id: str):
 
 
 @bp.route("/api/auth/users/<user_id>/import", methods=["POST"])
+@bp.route("/api/auth/users/<user_id>/bundle/import", methods=["POST"])
 def auth_import_user_backup(user_id: str):
-    """管理员向指定账号合并导入登记备份/文本。"""
+    """管理员向指定账号增量导入全部数据包（兼容旧公司备份）。"""
     require_admin()
     target = get_auth().read_user(user_id)
     if not target:
         raise AuthError("用户不存在", 404)
     payload = request.get_json(silent=True) or {}
-    service = service_for_account(target)
-    result = service.import_rows(payload.get("text", ""), overwrite=False, channel=payload.get("channel"))
+    result = import_account_bundle(target, payload.get("text", ""), overwrite=False)
     return jsonify(
         {
-            "message": f"已导入登记数据到账号「{target.get('username')}」：新增 {result['imported_count']}，更新 {result['updated_count']}，跳过 {result['skipped_count']}",
             **result,
+            "message": f"已增量导入到账号「{target.get('username')}」：{result.get('message', '')}",
         }
     )
 
 
 @bp.route("/api/auth/users/<user_id>/import-overwrite", methods=["POST"])
+@bp.route("/api/auth/users/<user_id>/bundle/import-overwrite", methods=["POST"])
 def auth_import_user_overwrite(user_id: str):
-    """管理员向指定账号覆盖导入登记备份/文本。"""
+    """管理员向指定账号覆盖导入全部数据包（兼容旧公司备份）。"""
     require_admin()
     target = get_auth().read_user(user_id)
     if not target:
         raise AuthError("用户不存在", 404)
     payload = request.get_json(silent=True) or {}
-    service = service_for_account(target)
-    result = service.import_rows(payload.get("text", ""), overwrite=True, channel=payload.get("channel"))
-    count = result.get("imported_count", 0) + result.get("updated_count", 0)
-    return jsonify({"message": f"已覆盖导入登记数据到账号「{target.get('username')}」：{count} 条", **result})
+    result = import_account_bundle(target, payload.get("text", ""), overwrite=True)
+    return jsonify(
+        {
+            **result,
+            "message": f"已覆盖导入到账号「{target.get('username')}」：{result.get('message', '')}",
+        }
+    )
 
 
 @bp.route("/api/auth/users/<user_id>/ignored/export", methods=["GET"])

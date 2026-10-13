@@ -11,6 +11,7 @@ from services.storage import RedisSettingsStore, create_storage
 _account_services: dict[str, CompanyService] = {}
 _blacklist_services: dict[str, BlacklistService] = {}
 _blocklist_services: dict[str, "BlocklistService"] = {}
+_watchlist_services: dict[str, "WatchlistService"] = {}
 _job_update_services: dict[str, "JobUpdateService"] = {}
 
 try:
@@ -156,6 +157,29 @@ def blocklist_for_account(user: dict):
     return service
 
 
+def watchlist_for_account(user: dict):
+    """持续关注企业：独立 Redis 前缀 …:watchlist。"""
+    from services.watchlist_service import WatchlistService
+
+    user_id = str(user["id"])
+    cached = _watchlist_services.get(user_id)
+    if cached is not None:
+        return cached
+    legacy = bool(user.get("legacyStore"))
+    base = AppConfig.REDIS_KEY_PREFIX if legacy else f"{AppConfig.REDIS_KEY_PREFIX}:user:{user_id}"
+    prefix = f"{base}:watchlist"
+    if legacy:
+        storage_file = str(Path(AppConfig.DATA_DIR) / "watchlist.json")
+    else:
+        storage_file = str(Path(AppConfig.DATA_DIR) / "users" / user_id / "watchlist.json")
+    config = dict(AppConfig.__dict__)
+    config["REDIS_KEY_PREFIX"] = prefix
+    config["STORAGE_FILE"] = storage_file
+    service = WatchlistService(create_storage(config, data_hash_name="items"))
+    _watchlist_services[user_id] = service
+    return service
+
+
 def job_updates_for_account(user: dict):
     """更新企业（岗位采集）：独立前缀 …:job-updates。"""
     from services.job_update_service import JobUpdateService
@@ -183,4 +207,5 @@ def drop_account_caches(user_id: str) -> None:
     _account_services.pop(user_id, None)
     _blacklist_services.pop(user_id, None)
     _blocklist_services.pop(user_id, None)
+    _watchlist_services.pop(user_id, None)
     _job_update_services.pop(user_id, None)

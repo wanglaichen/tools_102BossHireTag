@@ -17,12 +17,10 @@
 
 ## 技术栈
 
-- Python 3
-- Flask
+- **Web 前端**：Next.js 15（React）· `client/`
+- **API 后端**：Python 3 · Flask · `app.py` + `routes/` + `services/`
 - Redis
-- Bootstrap 5
-- Vercel
-- GitHub Actions
+- 微信小程序：`miniprogram/`（复用同一套 `/api/*`）
 
 ## 本地运行
 
@@ -65,46 +63,26 @@ json  强制使用本地 JSON
 | `GET` | `/api/settings` | 获取效果状态和行业选项 |
 | `PATCH` | `/api/settings` | 更新效果状态和行业选项 |
 
-启动：
+### 启停（唯一入口）
+
+配置写在仓库根目录 `.env`（`WEB_MODE` / `APP_PORT` / `CLIENT_PORT` / `NEXT_PUBLIC_API_BASE_URL`）。
 
 ```bash
-python app.py
+npm install
+npm install --prefix client
+./start.sh          # 按 WEB_MODE 启动
+./stop.sh           # 停止 API + Web
+./build.sh          # 生产构建前端；./build.sh --start 构建并启动
 ```
 
-打开：
+默认 `WEB_MODE=new`：
 
 ```text
-http://localhost:9212
+Web  http://127.0.0.1:${CLIENT_PORT}   # 例如 7001
+API  http://127.0.0.1:${APP_PORT}      # 例如 9212
 ```
 
-也可以使用脚本启动：
-
-```bash
-./restart.sh start
-```
-
-Windows 下用 Git Bash 执行同一个脚本：
-
-```bash
-./restart.sh start
-```
-
-这个脚本会先停掉占用 `APP_PORT` 的旧 Python 进程，再后台启动监控进程，进程退出后自动重启。
-Linux 上第一次使用前先执行：
-
-```bash
-chmod +x restart.sh
-```
-
-可用命令：
-
-```bash
-./restart.sh status
-./restart.sh stop
-./restart.sh restart
-```
-
-Linux 和 Windows Git Bash 都可以直接用同一个脚本。
+仅 API：`.env` 设 `WEB_MODE=api` 后执行 `./start.sh`。
 
 ## 代理配置
 

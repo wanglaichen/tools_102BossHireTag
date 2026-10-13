@@ -5,3 +5,8 @@
 .vercel/
 .venv/
 *.pyc
+node_modules/
+client/node_modules/
+client/.next/
+client/.env.local
+.DS_Store

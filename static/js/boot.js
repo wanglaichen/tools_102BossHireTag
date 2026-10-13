@@ -73,6 +73,27 @@ async function openWorkspace() {
             resetCompanyPage();
             renderCompanies();
         });
+        const hideIgnoredEl = byId("hideIgnoredFilter");
+        if (hideIgnoredEl) {
+            hideIgnoredEl.addEventListener("change", async () => {
+                const checked = Boolean(hideIgnoredEl.checked);
+                state.hideIgnoredCompanies = checked;
+                saveHireUiPrefs();
+                if (checked) {
+                    try {
+                        await refreshIgnoredNameSet({ force: true });
+                    } catch (error) {
+                        showMessage("error", `加载忽略企业失败：${error.message}`);
+                        hideIgnoredEl.checked = false;
+                        state.hideIgnoredCompanies = false;
+                        saveHireUiPrefs();
+                        return;
+                    }
+                }
+                resetCompanyPage();
+                renderCompanies();
+            });
+        }
         byId("saveProxyBtn").addEventListener("click", saveProxy);
         byId("proxyEnableCheck").addEventListener("change", toggleProxyInput);
         byId("refreshCompaniesBtn").addEventListener("click", refreshCompanies);
@@ -92,8 +113,10 @@ async function openWorkspace() {
         bindWorkspaceTabs();
         bindBlacklistEvents();
         bindBlocklistEvents();
+        bindWatchlistEvents();
         bindJobUpdatesEvents();
     }
+    loadHireUiPrefs();
     state.companies = [];
     try {
         await loadVersion();

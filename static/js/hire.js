@@ -158,14 +158,55 @@ document.addEventListener("click", (e) => {
     }
 });
 
+const HIRE_UI_PREF_PREFIX = "tools102-boss-hire-tag:hire-ui";
+
+function hireUiPrefKey() {
+    const uid = (state.account && state.account.id) || "guest";
+    return `${HIRE_UI_PREF_PREFIX}:${uid}`;
+}
+
+function loadHireUiPrefs() {
+    try {
+        const raw = localStorage.getItem(hireUiPrefKey());
+        const data = raw ? JSON.parse(raw) : {};
+        state.hideIgnoredCompanies = Boolean(data.hideIgnoredCompanies);
+    } catch (e) {
+        state.hideIgnoredCompanies = false;
+    }
+    const el = byId("hideIgnoredFilter");
+    if (el) el.checked = state.hideIgnoredCompanies;
+}
+
+function saveHireUiPrefs() {
+    try {
+        localStorage.setItem(
+            hireUiPrefKey(),
+            JSON.stringify({
+                hideIgnoredCompanies: Boolean(state.hideIgnoredCompanies),
+            })
+        );
+    } catch (e) {
+        // ignore quota / private mode
+    }
+}
+
 function getFilteredCompanies() {
     const keyword = byId("searchInput").value.trim().toLowerCase();
     const selectedStatuses = state.selectedStatuses;
     const statusFilterAll = selectedStatuses.length === 0;
     const hunter = byId("hunterFilter").value;
     const outsourced = byId("outsourcedFilter").value;
+    const hideIgnored = Boolean(state.hideIgnoredCompanies);
+    const ignoredSet = hideIgnored ? state.ignoredNameSet : null;
 
     return state.companies.filter((item) => {
+        if (ignoredSet && ignoredSet.size) {
+            const name = String(item.company_name || "").trim().toLowerCase();
+            if (name && ignoredSet.has(name)) {
+                return false;
+            }
+        }
+
         const searchable = [
             item.company_name,
             item.effect_status,
@@ -188,6 +229,81 @@ function getFilteredCompanies() {
 
         return (!keyword || searchable.includes(keyword)) && matchStatus && matchHunter && matchOutsourced;
     });
+}
+
+function applyIgnoredNameSet(channel, items) {
+    const names = new Set();
+    (items || []).forEach((row) => {
+        const name = String(row.company_name || "").trim().toLowerCase();
+        if (name) names.add(name);
+    });
+    state.ignoredNamesChannel = channel;
+    state.ignoredNameSet = names;
+}
+
+async function refreshIgnoredNameSet(options = {}) {
+    const channel = state.hireChannel || "boss";
+    const force = Boolean(options.force);
+    if (
+        !force
+        && state.ignoredNamesChannel === channel
+        && state.ignoredNameSet instanceof Set
+    ) {
+        return state.ignoredNameSet;
+    }
+
+    const cachedFull = state.cache.blacklistFull && state.cache.blacklistFull[channel];
+    if (!force && cachedFull && !cachedFull.dirty && Array.isArray(cachedFull.items)) {
+        applyIgnoredNameSet(channel, cachedFull.items);
+        return state.ignoredNameSet;
+    }
+
+    const entry = state.cache.blacklist[channel];
+    if (
+        !force
+        && entry
+        && !entry.dirty
+        && (entry.keyword || "") === ""
+        && Array.isArray(entry.items)
+    ) {
+        state.cache.blacklistFull[channel] = {
+            items: entry.items.slice(),
+            dirty: false,
+        };
+        applyIgnoredNameSet(channel, entry.items);
+        return state.ignoredNameSet;
+    }
+
+    const data = await requestJson(`/api/ignored?channel=${encodeURIComponent(channel)}`);
+    const items = data.items || [];
+    state.cache.blacklistFull = state.cache.blacklistFull || {};
+    state.cache.blacklistFull[channel] = { items: items.slice(), dirty: false };
+    // 若忽略页当前无搜索词，顺带刷新该渠道缓存
+    if ((state.blacklistKeyword || "") === "" && state.hireChannel === channel) {
+        state.cache.blacklist[channel] = {
+            items: items.slice(),
+            summary: data.summary || {},
+            keyword: "",
+            dirty: false,
+        };
+    }
+    applyIgnoredNameSet(channel, items);
+    return state.ignoredNameSet;
+}
+
+async function loadCompanies() {
+    const data = await requestJson(`/api/companies?time_filter=${encodeURIComponent(state.timeFilter)}&channel=${encodeURIComponent(state.hireChannel || "boss")}`);
+    state.companies = data.items || [];
+    if (state.hideIgnoredCompanies) {
+        try {
+            await refreshIgnoredNameSet({ force: false });
+        } catch (error) {
+            showMessage("error", `加载忽略企业失败：${error.message}`);
+        }
+    }
+    resetCompanyPage();
+    renderCompanies();
+    rememberHireCache();
 }
 
 function renderCompanies() {
@@ -418,14 +534,6 @@ async function loadSummary() {
     state.cache.hire[channel] = entry;
 }
 
-async function loadCompanies() {
-    const data = await requestJson(`/api/companies?time_filter=${encodeURIComponent(state.timeFilter)}&channel=${encodeURIComponent(state.hireChannel || "boss")}`);
-    state.companies = data.items || [];
-    resetCompanyPage();
-    renderCompanies();
-    rememberHireCache();
-}
-
 async function submitCompany(event) {
     event.preventDefault();
     clearMessages();
@@ -503,6 +611,16 @@ async function addCompanyToIgnored(item) {
                 keyword: state.blacklistKeyword || "",
                 dirty: false,
             };
+        }
+        state.cache.blacklistFull = state.cache.blacklistFull || {};
+        state.cache.blacklistFull[channel] = {
+            items: (result.items || []).slice(),
+            dirty: false,
+        };
+        applyIgnoredNameSet(channel, result.items || []);
+        if (state.hideIgnoredCompanies) {
+            resetCompanyPage();
+            renderCompanies();
         }
     } catch (error) {
         showMessage("error", error.message);
@@ -680,7 +798,9 @@ async function confirmClearCompanies() {
         ? "ignored"
         : (state.clearKind === "blocklist"
             ? "blocklist"
-            : (state.clearKind === "jobUpdates" ? "jobUpdates" : "hire"));
+            : (state.clearKind === "watchlist"
+                ? "watchlist"
+                : (state.clearKind === "jobUpdates" ? "jobUpdates" : "hire")));
     try {
         if (kind === "ignored") {
             const result = await requestJson("/api/ignored/clear", {
@@ -705,6 +825,16 @@ async function confirmClearCompanies() {
             resetBlocklistForm();
             invalidateBlocklistCache();
             rememberBlocklistCache();
+        } else if (kind === "watchlist") {
+            const result = await requestJson("/api/watchlist/clear", { method: "POST", body: "{}" });
+            closeClearCompaniesModal();
+            showMessage("success", result.message || "已清空持续关注");
+            state.watchlist = result.items || [];
+            renderWatchlistSummary(result.summary || {});
+            renderWatchlist();
+            resetWatchlistForm();
+            invalidateWatchlistCache();
+            rememberWatchlistCache();
         } else if (kind === "jobUpdates") {
             const result = await requestJson("/api/job-updates/clear", {
                 method: "POST",

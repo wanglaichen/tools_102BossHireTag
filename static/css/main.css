@@ -1502,6 +1502,54 @@ select[multiple] {
     min-width: 560px;
 }
 
+/* 投递列表筛选项较多：单独用 flex，避免影响忽略/黑名单等页工具栏 */
+.search-group-hire {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    grid-template-columns: none;
+}
+
+.search-group-hire > .form-control {
+    flex: 1 1 220px;
+    min-width: 180px;
+}
+
+.search-group-hire > .form-select,
+.search-group-hire > .multi-filter-dropdown {
+    flex: 0 1 160px;
+    min-width: 130px;
+}
+
+.hire-ignored-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--muted, #5b6472);
+    user-select: none;
+    cursor: pointer;
+}
+
+.hire-ignored-toggle input {
+    margin: 0;
+}
+
+/* 备份导入用的 file input：始终隐藏，不依赖 Bootstrap .d-none */
+.file-input-hidden,
+input[type="file"].file-input-hidden {
+    display: none !important;
+    position: absolute !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
 .action-group {
     display: flex;
     gap: 10px;
@@ -1660,6 +1708,12 @@ select[multiple] {
 .muted-line {
     color: var(--muted);
     font-size: 12px;
+}
+
+.company-full-name {
+    margin-top: 2px;
+    line-height: 1.35;
+    word-break: break-all;
 }
 
 .status-pill,
@@ -1990,6 +2044,13 @@ select[multiple] {
     .search-group {
         min-width: 100%;
         grid-template-columns: 1fr;
+    }
+
+    .search-group-hire > .form-control,
+    .search-group-hire > .form-select,
+    .search-group-hire > .multi-filter-dropdown {
+        flex: 1 1 100%;
+        min-width: 0;
     }
 }
 

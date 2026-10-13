@@ -1,0 +1,13 @@
+{
+  "channel": "boss",
+  "items": [
+    {
+      "company_name": "请替换为真实公司名",
+      "job_title": "请替换为真实岗位名",
+      "salary_min": 20,
+      "salary_max": 40,
+      "location": "上海·浦东新区",
+      "job_summary": "请粘贴岗位原文简介。\n第二行也会保留，入库后显示为 \\n。"
+    }
+  ]
+}

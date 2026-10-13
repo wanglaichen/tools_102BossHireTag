@@ -194,8 +194,15 @@ function renderBlacklist() {
     }
     state.blacklist.forEach((item) => {
         const tr = document.createElement("tr");
+        const fullName = String(item.company_full_name || "").trim();
+        const fullNameHtml = fullName
+            ? `<div class="muted-line company-full-name">${escapeHtml(fullName)}</div>`
+            : "";
         tr.innerHTML = `
-            <td><div class="company-name">${escapeHtml(item.company_name)}</div></td>
+            <td>
+                <div class="company-name">${escapeHtml(item.company_name || "")}</div>
+                ${fullNameHtml}
+            </td>
             <td>${formatTimeHtml(item.updated_at)}</td>
             <td>
                 <div class="row-actions">
@@ -214,6 +221,7 @@ function renderBlacklist() {
 function fillBlacklistForm(item) {
     state.blacklistEditingId = item.id;
     byId("blacklistNameInput").value = item.company_name || "";
+    byId("blacklistFullNameInput").value = item.company_full_name || "";
     byId("blacklistReasonInput").value = item.reason || "";
     byId("blacklistSubmitBtn").textContent = "保存修改";
     byId("blacklistCancelBtn").classList.remove("d-none");
@@ -233,6 +241,7 @@ async function submitBlacklist(event) {
     clearMessages();
     const payload = {
         company_name: byId("blacklistNameInput").value.trim(),
+        company_full_name: byId("blacklistFullNameInput").value.trim(),
         reason: byId("blacklistReasonInput").value.trim(),
         channel: state.hireChannel || "boss",
     };

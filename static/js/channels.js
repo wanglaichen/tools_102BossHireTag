@@ -5,7 +5,7 @@ function channelQuery(extra = "") {
 }
 
 const NAV_MEMORY_PREFIX = "tools102-boss-hire-tag:nav";
-const NAV_FEATURES = ["hire", "blacklist", "blocklist", "jobUpdates"];
+const NAV_FEATURES = ["hire", "blacklist", "blocklist", "watchlist", "jobUpdates"];
 
 function navMemoryStorageKey() {
     const uid = (state.account && state.account.id) || "guest";
@@ -85,10 +85,17 @@ function rememberHireCache() {
     };
 }
 
-function applyHireCache(entry) {
+async function applyHireCache(entry) {
     state.companies = Array.isArray(entry.companies) ? entry.companies.slice() : [];
     if (entry.summary) {
         renderSummary(entry.summary);
+    }
+    if (state.hideIgnoredCompanies && typeof refreshIgnoredNameSet === "function") {
+        try {
+            await refreshIgnoredNameSet({ force: false });
+        } catch (error) {
+            showMessage("error", `加载忽略企业失败：${error.message}`);
+        }
     }
     resetCompanyPage();
     renderCompanies();
@@ -108,16 +115,28 @@ function invalidateHireCache(channel) {
 function rememberBlacklistCache() {
     const channel = state.hireChannel || "boss";
     const keyword = state.blacklistKeyword || "";
+    const items = Array.isArray(state.blacklist) ? state.blacklist.slice() : [];
     state.cache.blacklist[channel] = {
-        items: Array.isArray(state.blacklist) ? state.blacklist.slice() : [],
+        items,
         summary: {
-            blacklist_count: Number(byId("blacklistCount")?.textContent || state.blacklist.length) || 0,
-            ignored_count: Number(byId("blacklistCount")?.textContent || state.blacklist.length) || 0,
+            blacklist_count: Number(byId("blacklistCount")?.textContent || items.length) || 0,
+            ignored_count: Number(byId("blacklistCount")?.textContent || items.length) || 0,
             last_updated_at: state.blacklistSummaryUpdatedAt || "",
         },
         keyword,
         dirty: false,
     };
+    state.cache.blacklistFull = state.cache.blacklistFull || {};
+    // 无搜索词时同步全量缓存，供投递「隐藏忽略企业」使用
+    if (!keyword) {
+        state.cache.blacklistFull[channel] = { items: items.slice(), dirty: false };
+        if (typeof applyIgnoredNameSet === "function") {
+            applyIgnoredNameSet(channel, items);
+        }
+        if (state.hideIgnoredCompanies && state.feature === "hire" && typeof renderCompanies === "function") {
+            renderCompanies();
+        }
+    }
 }
 
 function applyBlacklistCache(entry) {
@@ -135,11 +154,22 @@ function invalidateBlacklistCache(channel) {
     if (channel) {
         const entry = state.cache.blacklist[channel];
         if (entry) entry.dirty = true;
+        const full = state.cache.blacklistFull && state.cache.blacklistFull[channel];
+        if (full) full.dirty = true;
+        if (state.ignoredNamesChannel === channel) {
+            state.ignoredNameSet = null;
+            state.ignoredNamesChannel = "";
+        }
         return;
     }
     Object.keys(state.cache.blacklist).forEach((key) => {
         state.cache.blacklist[key].dirty = true;
     });
+    Object.keys(state.cache.blacklistFull || {}).forEach((key) => {
+        state.cache.blacklistFull[key].dirty = true;
+    });
+    state.ignoredNameSet = null;
+    state.ignoredNamesChannel = "";
 }
 
 async function ensureHireLoaded(options = {}) {
@@ -153,7 +183,7 @@ async function ensureHireLoaded(options = {}) {
         && entry.timeFilter === (state.timeFilter || "all")
         && Array.isArray(entry.companies)
     ) {
-        applyHireCache(entry);
+        await applyHireCache(entry);
         return;
     }
     await loadSummary();
@@ -193,6 +223,23 @@ async function ensureBlocklistLoaded(options = {}) {
         return;
     }
     await loadBlocklist({ force: true });
+}
+
+async function ensureWatchlistLoaded(options = {}) {
+    const keyword = (byId("watchlistSearchInput")?.value || "").trim();
+    const entry = state.cache.watchlist;
+    const force = Boolean(options.forceReload);
+    if (
+        !force
+        && entry
+        && !entry.dirty
+        && (entry.keyword || "") === keyword
+        && Array.isArray(entry.items)
+    ) {
+        applyWatchlistCache(entry);
+        return;
+    }
+    await loadWatchlist({ force: true });
 }
 
 async function ensureJobUpdatesLoaded(options = {}) {
@@ -321,6 +368,13 @@ function switchFeature(feature, channel) {
         return;
     }
 
+    if (state.feature === "watchlist") {
+        syncChannelSubtabActive();
+        saveNavMemory();
+        ensureWatchlistLoaded({ forceReload: false }).catch((error) => showMessage("error", error.message));
+        return;
+    }
+
     const firstChannel = (state.channels[0] && state.channels[0].id) || "boss";
     const nextChannel = channel || state.hireChannel || firstChannel;
     switchHireChannel(nextChannel, { reloadHire: state.feature === "hire" });
@@ -345,6 +399,10 @@ function switchHireChannel(channel, options = {}) {
 
     if (state.feature === "blocklist") {
         ensureBlocklistLoaded(options).catch((error) => showMessage("error", error.message));
+        return;
+    }
+    if (state.feature === "watchlist") {
+        ensureWatchlistLoaded(options).catch((error) => showMessage("error", error.message));
         return;
     }
 

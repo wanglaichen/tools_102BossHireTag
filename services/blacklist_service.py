@@ -9,6 +9,7 @@ from services.storage import JsonStorage, RedisStorage
 
 FIELD_LIMITS = {
     "company_name": 120,
+    "company_full_name": 200,
     "reason": 500,
 }
 
@@ -35,6 +36,7 @@ class BlacklistService:
                 item
                 for item in items
                 if text in str(item.get("company_name") or "").casefold()
+                or text in str(item.get("company_full_name") or "").casefold()
                 or text in str(item.get("reason") or "").casefold()
             ]
         return sorted(items, key=lambda x: str(x.get("updated_at") or ""), reverse=True)
@@ -51,6 +53,9 @@ class BlacklistService:
         record = {
             "id": str(uuid.uuid4()),
             "company_name": company_name,
+            "company_full_name": self._clean_text(
+                payload.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+            ),
             "channel": channel,
             "reason": self._clean_text(payload.get("reason"), FIELD_LIMITS["reason"]),
             "created_at": now,
@@ -75,6 +80,10 @@ class BlacklistService:
             if existing and existing.get("id") != item_id:
                 raise ValueError("当前渠道下该企业已在忽略列表中")
             record["company_name"] = company_name
+        if "company_full_name" in payload:
+            record["company_full_name"] = self._clean_text(
+                payload.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+            )
         if "reason" in payload:
             record["reason"] = self._clean_text(payload.get("reason"), FIELD_LIMITS["reason"])
         if "channel" in payload:
@@ -136,11 +145,12 @@ class BlacklistService:
         channel_id = self._normalize_channel(channel) if channel else None
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["企业名称", "忽略原因", "渠道", "创建时间", "更新时间"])
+        writer.writerow(["企业名称", "企业全称", "忽略原因", "渠道", "创建时间", "更新时间"])
         for item in self.list_items(channel=channel_id):
             writer.writerow(
                 [
                     item.get("company_name") or "",
+                    item.get("company_full_name") or "",
                     item.get("reason") or "",
                     self._item_channel(item),
                     item.get("created_at") or "",
@@ -212,6 +222,9 @@ class BlacklistService:
                 {
                     "id": str(item.get("id") or uuid.uuid4()),
                     "company_name": name,
+                    "company_full_name": self._clean_text(
+                        item.get("company_full_name"), FIELD_LIMITS["company_full_name"]
+                    ),
                     "channel": row_channel,
                     "reason": self._clean_text(item.get("reason"), FIELD_LIMITS["reason"]),
                     "created_at": str(item.get("created_at") or now),
@@ -246,6 +259,7 @@ class BlacklistService:
             if existing:
                 existing["reason"] = item["reason"]
                 existing["channel"] = item["channel"]
+                existing["company_full_name"] = item.get("company_full_name") or ""
                 existing["updated_at"] = now
                 updated_count += 1
                 self._save_item(data, existing)

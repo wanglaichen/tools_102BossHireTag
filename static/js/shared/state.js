@@ -24,6 +24,10 @@ const state = {
     blocklistEditingId: null,
     blocklistKeyword: "",
     blocklistImportMode: "merge",
+    watchlist: [],
+    watchlistEditingId: null,
+    watchlistKeyword: "",
+    watchlistImportMode: "merge",
     jobUpdates: [],
     jobUpdatesKeyword: "",
     jobUpdatesTimeFilter: "all",
@@ -38,10 +42,18 @@ const state = {
     page: 1,
     pageSize: 30,
     workspaceTab: "list",
+    /** 投递列表是否隐藏「同渠道忽略企业」中的公司 */
+    hideIgnoredCompanies: false,
+    /** 当前渠道忽略企业名集合（小写精确匹配） */
+    ignoredNameSet: null,
+    ignoredNamesChannel: "",
     cache: {
         hire: {},
         blacklist: {},
+        /** 无搜索词的全量忽略列表，供投递侧过滤 */
+        blacklistFull: {},
         blocklist: null,
+        watchlist: null,
         jobUpdates: {},
     },
 };

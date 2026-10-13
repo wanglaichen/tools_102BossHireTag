@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
+import os
 import secrets
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from typing import Any
 
 try:
@@ -15,16 +18,24 @@ try:
 except ImportError:  # pragma: no cover
     redis = None
 
+# 自助注册默认试用 72 小时（3 天）；到期后需管理员解锁/解除试用
+DEFAULT_SELF_REGISTER_TRIAL_HOURS = 72
+SETTING_SELF_REGISTER_TRIAL_HOURS = "selfRegisterTrialHours"
+ACCOUNT_LOCKED_MESSAGE = "账号已锁定或试用已到期，请联系管理员解锁"
+
 
 class AuthError(Exception):
-    def __init__(self, message: str, status_code: int = 401) -> None:
+    def __init__(self, message: str, status_code: int = 401, code: str = "") -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.code = code or ""
 
 
 class AuthService:
     """WeChat mini-program login + bearer token sessions stored in Redis (or memory)."""
+
+    DEFAULT_SELF_REGISTER_TRIAL_HOURS = DEFAULT_SELF_REGISTER_TRIAL_HOURS
 
     def __init__(
         self,
@@ -52,7 +63,10 @@ class AuthService:
         self.admin_password = admin_password or ""
         self._client: Any = None
         self._memory: dict[str, dict[str, Any]] = {}
-
+        env_hours = os.getenv("AUTH_SELF_REGISTER_TRIAL_HOURS", "").strip()
+        self._default_trial_hours = (
+            self.parse_trial_hours(env_hours) if env_hours != "" else DEFAULT_SELF_REGISTER_TRIAL_HOURS
+        )
     @property
     def _sessions_key(self) -> str:
         return f"{self.key_prefix}:auth:sessions"
@@ -233,6 +247,9 @@ class AuthService:
         if admin.get("locked"):
             admin["locked"] = False
             changed = True
+        if admin.get("trialExpiresAt"):
+            admin["trialExpiresAt"] = None
+            changed = True
         if not self.verify_password(password, admin.get("passwordHash")):
             admin["passwordHash"] = self.hash_password(password)
             changed = True
@@ -240,6 +257,100 @@ class AuthService:
             admin["updatedAt"] = self._now_iso()
             self.write_user(admin)
         return admin
+
+    def _auth_settings_key(self) -> str:
+        return f"{self.key_prefix}:auth:app-settings"
+
+    def read_app_settings(self) -> dict[str, Any]:
+        client = self.client
+        if client is not None:
+            try:
+                raw = client.hgetall(self._auth_settings_key()) or {}
+                return dict(raw) if isinstance(raw, dict) else {}
+            except Exception:
+                pass
+        data = self._memory.get("__auth_settings__")
+        return dict(data) if isinstance(data, dict) else {}
+
+    def write_app_setting(self, key: str, value: Any) -> None:
+        client = self.client
+        if client is not None:
+            try:
+                client.hset(self._auth_settings_key(), key, str(value))
+                return
+            except Exception:
+                pass
+        settings = self._memory.setdefault("__auth_settings__", {})
+        settings[key] = str(value)
+
+    @staticmethod
+    def parse_trial_hours(raw: Any) -> int:
+        try:
+            n = float(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_SELF_REGISTER_TRIAL_HOURS
+        if not math.isfinite(n) or n < 0:
+            return DEFAULT_SELF_REGISTER_TRIAL_HOURS
+        return min(int(n), 24 * 365 * 5)
+
+    def get_self_register_trial_hours(self) -> int:
+        settings = self.read_app_settings()
+        if SETTING_SELF_REGISTER_TRIAL_HOURS not in settings:
+            return self._default_trial_hours
+        return self.parse_trial_hours(settings[SETTING_SELF_REGISTER_TRIAL_HOURS])
+
+    def set_self_register_trial_hours(self, hours: Any) -> int:
+        try:
+            n = float(hours)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("试用时长须为 ≥ 0 的整数小时（0 表示自助注册即永久）") from exc
+        if not math.isfinite(n) or n < 0:
+            raise ValueError("试用时长须为 ≥ 0 的整数小时（0 表示自助注册即永久）")
+        value = min(int(n), 24 * 365 * 5)
+        self.write_app_setting(SETTING_SELF_REGISTER_TRIAL_HOURS, str(value))
+        return value
+
+    @staticmethod
+    def compute_trial_expires_at(hours: int | None) -> str | None:
+        if not hours or hours <= 0:
+            return None
+        return (
+            datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + hours * 3600,
+                tz=timezone.utc,
+            )
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    @staticmethod
+    def is_permanent_user(user: dict[str, Any] | None) -> bool:
+        if not user:
+            return True
+        if user.get("role") == "admin":
+            return True
+        if user.get("source") in ("admin", "system"):
+            return True
+        if user.get("trialExpiresAt") in (None, ""):
+            return True
+        return False
+
+    def is_trial_expired(self, user: dict[str, Any] | None) -> bool:
+        if self.is_permanent_user(user):
+            return False
+        try:
+            ts = datetime.fromisoformat(
+                str((user or {}).get("trialExpiresAt", "")).replace("Z", "+00:00")
+            ).timestamp()
+        except Exception:
+            return False
+        return ts <= time.time()
+
+    def assert_user_accessible(self, user: dict[str, Any]) -> None:
+        if self._is_locked(user):
+            raise AuthError(ACCOUNT_LOCKED_MESSAGE, 403, code="ACCOUNT_LOCKED")
+        if self.is_trial_expired(user):
+            raise AuthError(ACCOUNT_LOCKED_MESSAGE, 403, code="TRIAL_EXPIRED")
 
     def create_user(
         self,
@@ -250,6 +361,7 @@ class AuthService:
         role: str = "user",
         source: str = "admin",
         legacy_store: bool = False,
+        apply_trial: bool = False,
     ) -> dict[str, Any]:
         import re
         from uuid import uuid4
@@ -263,14 +375,25 @@ class AuthService:
             raise ValueError("用户名已存在")
 
         now = self._now_iso()
+        resolved_role = "admin" if role == "admin" else "user"
+        if resolved_role == "admin":
+            resolved_source = "system" if source == "system" else "admin"
+        else:
+            resolved_source = source if source in {"system", "admin", "self", "wechat"} else "admin"
+
+        trial_expires_at = None
+        if resolved_role != "admin" and apply_trial and resolved_source == "self":
+            trial_expires_at = self.compute_trial_expires_at(self.get_self_register_trial_hours())
+
         user = {
             "id": str(uuid4()),
             "username": name,
             "passwordHash": self.hash_password(str(password)),
             "displayName": str(display_name or name).strip() or name,
-            "role": "admin" if role == "admin" else "user",
-            "source": source if source in {"system", "admin", "self", "wechat"} else "admin",
+            "role": resolved_role,
+            "source": resolved_source,
             "locked": False,
+            "trialExpiresAt": trial_expires_at,
             "legacyStore": bool(legacy_store),
             "createdAt": now,
             "updatedAt": now,
@@ -296,6 +419,7 @@ class AuthService:
             display_name=display_name,
             role="user",
             source="self",
+            apply_trial=True,
         )
         session = self.create_session(user["id"])
         return {"token": session["token"], "expiresAt": session["expiresAt"], "user": self.public_user(user)}
@@ -305,8 +429,7 @@ class AuthService:
         user = self.find_user_by_username(name)
         if not user or not self.verify_password(str(password or ""), user.get("passwordHash")):
             raise AuthError("用户名或密码错误", 401)
-        if self._is_locked(user):
-            raise AuthError("账号已锁定，请联系管理员", 403)
+        self.assert_user_accessible(user)
         session = self.create_session(user["id"])
         return {"token": session["token"], "expiresAt": session["expiresAt"], "user": self.public_user(user)}
 
@@ -323,10 +446,8 @@ class AuthService:
                 user = self.ensure_wechat_user(str(openid))
         if not user:
             raise AuthError("未登录或 Token 无效")
-        if self._is_locked(user):
-            raise AuthError("账号已锁定，请联系管理员", 403)
+        self.assert_user_accessible(user)
         return user
-
     def change_password(self, user_id: str, old_password: str, new_password: str) -> dict[str, Any]:
         user = self.read_user(user_id)
         if not user:
@@ -363,12 +484,23 @@ class AuthService:
             target["role"] = "admin" if payload.get("role") == "admin" else "user"
             if target["role"] == "admin":
                 target["locked"] = False
+                target["trialExpiresAt"] = None
+        if payload.get("permanent") is True:
+            if not is_admin:
+                raise AuthError("仅管理员可解除试用限制", 403)
+            target["trialExpiresAt"] = None
         if "locked" in payload:
             if not is_admin:
-                raise AuthError("仅管理员可锁定账号", 403)
-            if target.get("role") == "admin" or user_id == actor.get("id"):
-                raise ValueError("不能锁定管理员或当前登录账号")
+                raise AuthError("仅管理员可锁定/解锁账号", 403)
+            if target.get("role") == "admin":
+                raise ValueError("不能锁定管理员账号")
+            if user_id == actor.get("id"):
+                raise ValueError("不能锁定当前登录账号")
             target["locked"] = bool(payload.get("locked"))
+            if target["locked"]:
+                target["lockedAt"] = self._now_iso()
+            else:
+                target.pop("lockedAt", None)
         target["updatedAt"] = self._now_iso()
         self.write_user(target)
         return self.public_user(target)
@@ -404,13 +536,28 @@ class AuthService:
         return users
 
     def public_user(self, user: dict[str, Any]) -> dict[str, Any]:
+        permanent = self.is_permanent_user(user)
+        expires_at = None if permanent else (user.get("trialExpiresAt") or None)
+        trial_status = "permanent"
+        trial_remaining_ms: int | None = None
+        if not permanent and expires_at:
+            try:
+                ts = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00")).timestamp()
+                remaining = int((ts - time.time()) * 1000)
+                trial_status = "active" if remaining > 0 else "expired"
+                trial_remaining_ms = remaining
+            except Exception:
+                trial_status = "permanent"
         return {
             "id": user["id"],
             "username": user["username"],
             "displayName": user.get("displayName") or user["username"],
             "role": user.get("role") or "user",
-            "source": user.get("source") or "admin",
+            "source": user.get("source") or ("system" if user.get("role") == "admin" else "admin"),
             "locked": self._is_locked(user),
+            "trialExpiresAt": expires_at,
+            "trialStatus": trial_status,
+            "trialRemainingMs": trial_remaining_ms,
             "legacyStore": bool(user.get("legacyStore")),
             "createdAt": user.get("createdAt"),
             "updatedAt": user.get("updatedAt"),

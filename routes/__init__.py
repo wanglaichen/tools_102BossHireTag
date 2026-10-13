@@ -14,6 +14,7 @@ def register_blueprints(app: Flask) -> None:
     from routes.job_updates import bp as job_updates_bp
     from routes.proxy import bp as proxy_bp
     from routes.settings import bp as settings_bp
+    from routes.watchlist import bp as watchlist_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(channels_bp)
@@ -22,5 +23,6 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(settings_bp)
     app.register_blueprint(blacklist_bp)
     app.register_blueprint(blocklist_bp)
+    app.register_blueprint(watchlist_bp)
     app.register_blueprint(job_updates_bp)
     app.register_blueprint(proxy_bp)

@@ -1,4 +1,6 @@
-from flask import Flask, g, jsonify, render_template, request
+import os
+
+from flask import Flask, g, jsonify, request
 from werkzeug.exceptions import HTTPException
 
 from config import AppConfig
@@ -46,6 +48,7 @@ register_blueprints(app)
 _AUTH_PUBLIC_EXACT = {
     "/api/auth/login",
     "/api/auth/register",
+    "/api/auth/registration-policy/public",
     "/api/version",
 }
 
@@ -64,7 +67,10 @@ def _auth_guard():
     try:
         _require_account()
     except AuthError as error:
-        return jsonify({"message": error.message}), error.status_code
+        body = {"message": error.message}
+        if error.code:
+            body["code"] = error.code
+        return jsonify(body), error.status_code
 
 
 @app.after_request
@@ -83,7 +89,10 @@ def _add_cors_headers(response):
 
 @app.errorhandler(AuthError)
 def handle_auth_error(error: AuthError):
-    return jsonify({"message": error.message}), error.status_code
+    body = {"message": error.message}
+    if error.code:
+        body["code"] = error.code
+    return jsonify(body), error.status_code
 
 
 @app.errorhandler(StorageUnavailable)
@@ -107,14 +116,45 @@ def handle_unexpected_error(error):
     return jsonify({"message": "服务器内部错误"}), 500
 
 
+def _web_mode() -> str:
+    mode = (os.getenv("WEB_MODE") or "new").strip().lower()
+    if mode in {"next", "web"}:
+        return "new"
+    if mode in {"api-only", "none"}:
+        return "api"
+    if mode in {"new", "api"}:
+        return mode
+    return "new"
+
+
 @app.route("/api/version", methods=["GET"])
 def get_version():
-    return jsonify({"version": AppConfig.APP_VERSION})
+    return jsonify({"version": AppConfig.APP_VERSION, "web_mode": _web_mode()})
 
 
 @app.route("/")
 def index():
-    return render_template("index.html", app_version=AppConfig.APP_VERSION)
+    """API 说明；Web 请用 Next（./start.sh，WEB_MODE=new）。旧版页面已移除。"""
+    mode = _web_mode()
+    client_host = os.getenv("CLIENT_HOST", "127.0.0.1")
+    client_port = os.getenv("CLIENT_PORT", "3000")
+    web = f"http://{client_host}:{client_port}" if mode == "new" else None
+    return jsonify(
+        {
+            "name": "tools102-boss-hire-tag-api",
+            "version": AppConfig.APP_VERSION,
+            "web_mode": mode,
+            "message": (
+                "WEB_MODE=new：请打开 Next 前端（./start.sh）"
+                if mode == "new"
+                else "WEB_MODE=api：仅 API"
+            ),
+            "web": web,
+            "api_port": AppConfig.APP_PORT,
+            "client_port": int(client_port) if str(client_port).isdigit() else client_port,
+            "docs": ["/api/version", "/api/auth/login", "/api/companies"],
+        }
+    )
 
 
 if __name__ == "__main__":
